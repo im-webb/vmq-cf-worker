@@ -2,6 +2,7 @@ import type { Env, OrderRow, PassageRow } from './db';
 import { appSecret, getConfig, STATUS } from './db';
 import { verifyEpay } from './sign';
 import { allocatePrice, fenToYuan, releasePrice, yuanToFen } from './amount';
+import { findMatch as findFixedQrcode } from '../modules/qrcodes/qrcode.repository';
 import { nameToPayType } from './notify';
 import { fmtYmdHms, now, randomInt } from './util';
 
@@ -10,6 +11,7 @@ export interface CreateOrderResult {
   msg: string;
   order?: OrderRow;
   payUrl?: string;
+  payUrlType?: number;
   isAuto?: number;
   passage?: PassageRow;
 }
@@ -87,14 +89,14 @@ export interface NewOrder {
   param?: string;
 }
 
-/** 抢金额 → 选收款码 → 写订单。前面的校验各入口自己负责 */
+/** 抢金额 → 固定码优先 → 默认码兜底 → 写订单。前面的校验各入口自己负责 */
 async function insertOrder(env: Env, o: NewOrder): Promise<CreateOrderResult> {
-  const passage = await env.DB.prepare(
+  const defaultPassage = await env.DB.prepare(
     'SELECT * FROM passages WHERE type = ? AND status = 1 ORDER BY id LIMIT 1'
   )
     .bind(o.type)
     .first<PassageRow>();
-  if (!passage) return { ok: false, msg: '暂无可用支付通道' };
+  if (!defaultPassage) return { ok: false, msg: '暂无可用支付通道' };
 
   const ts = now();
   const orderId = `${fmtYmdHms(ts)}${randomInt(10)}${randomInt(10)}${randomInt(10)}${randomInt(10)}`;
@@ -104,16 +106,35 @@ async function insertOrder(env: Env, o: NewOrder): Promise<CreateOrderResult> {
 
   const truemoney = fenToYuan(realFen);
 
-  // 订单一律用通道自己的收款码，全部由监控端自动核对（is_auto 恒为 1）
-  const payUrl = passage.ewm;
-  const isAuto = 1;
-
   try {
+    let passage = defaultPassage;
+    let payUrl = defaultPassage.ewm;
+    let payUrlType = Number(defaultPassage.ewm_type ?? 0);
+    let isAuto = 1;
+
+    // 原版 vmqphp 的核心行为：按“分配后的实际金额 + 支付类型”精确查固定码。
+    // 命中后立即改用固定码真正所属的通道；未命中继续使用默认无金额码。
+    const fixed = await findFixedQrcode(env.DB, realFen, o.type);
+    if (fixed) {
+      const fixedPassage = await env.DB.prepare(
+        'SELECT * FROM passages WHERE id = ? AND type = ? AND status = 1'
+      )
+        .bind(fixed.passage_id, o.type)
+        .first<PassageRow>();
+
+      if (fixedPassage) {
+        passage = fixedPassage;
+        payUrl = fixed.pay_url;
+        payUrlType = Number(fixed.ewm_type ?? 0);
+        isAuto = 0;
+      }
+    }
+
     await env.DB.prepare(
       `INSERT INTO orders
         (order_id, out_trade_no, name, type, pid, passage_id, money, truemoney,
-         pay_url, is_auto, notify_url, return_url, sitename, param, status, create_time, ip)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         pay_url, pay_url_type, is_auto, notify_url, return_url, sitename, param, status, create_time, ip)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
       .bind(
         orderId,
@@ -125,6 +146,7 @@ async function insertOrder(env: Env, o: NewOrder): Promise<CreateOrderResult> {
         fenToYuan(o.fen),
         truemoney,
         payUrl,
+        payUrlType,
         isAuto,
         o.notifyUrl ?? '',
         o.returnUrl ?? '',
@@ -135,16 +157,23 @@ async function insertOrder(env: Env, o: NewOrder): Promise<CreateOrderResult> {
         o.ip
       )
       .run();
+
+    const order = await getOrder(env, orderId);
+    return {
+      ok: true,
+      msg: '成功',
+      order: order ?? undefined,
+      payUrl,
+      payUrlType,
+      isAuto,
+      passage,
+    };
   } catch (e) {
     await releasePrice(env, orderId);
     console.error('insert order failed', e);
     return { ok: false, msg: '订单创建失败' };
   }
-
-  const order = await getOrder(env, orderId);
-  return { ok: true, msg: '成功', order: order ?? undefined, payUrl, isAuto, passage };
 }
-
 /* ---------------- 示例页下单 ---------------- */
 
 /** 示例页固定商品名（旧版就是这个） */

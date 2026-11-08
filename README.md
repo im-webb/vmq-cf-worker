@@ -166,7 +166,37 @@ pnpm run deploy
 >
 > 三种取值见下面「异步回调」一节。
 
-### 8. 绑定监控端
+### 8. 固定金额码（可选）
+
+后台「固定金额码」用于给某个通道预先绑定：
+
+```text
+实际支付金额 + 支付类型 → 固定金额收款码
+```
+
+下单流程：
+
+1. 系统先按金额池分配实际应付金额
+2. 用“实际应付金额 + 支付类型”精确查找启用的固定码
+3. 命中时返回固定码，接口 `isAuto = 0`，订单归属固定码所属通道
+4. 未命中时回退该支付类型的第一个启用通道默认码，接口 `isAuto = 1`，用户需按页面金额付款
+
+例如 `10.00` 已被其他待支付订单占用，新订单会变成 `10.01`。此时应配置 `10.01` 的固定码；没有配置就自动回退无金额码。
+
+固定码支持两种录入方式：
+
+- **上传图片并解码**：保存二维码文本，支付页现场生成二维码
+- **上传为图片**：保存图片地址，支付页直接展示原图（适合赞赏码）
+
+全新安装直接执行 `pnpm db:remote` 即可。已有 D1 升级只需执行一次：
+
+```bash
+pnpm exec wrangler d1 execute vmq --remote -c .\wrangler.local.jsonc --file=.\migrations\20261108_fixed_amount_qrcodes.sql
+```
+
+> 同一通道、同一金额只允许一条固定码。当前监控协议按“支付类型 + 到账金额”匹配订单，因此仍需依赖金额池保证同一金额、同一支付类型同时只有一笔待支付订单。
+
+### 9. 绑定监控端
 
 用 [V免签配套监控安卓端](https://github.com/im-webb/vmq-monitor-android) 扫描后台「通道管理」列表里的「APP扫码配置」二维码，或在 App 里按同样格式手动填写：
 
@@ -197,6 +227,7 @@ https://your-domain.com/通讯密钥/通道id,支付类型      例：https://pa
 | 装依赖 | `pnpm install` | 本地 |
 | 新建 D1 库 | `pnpm db:create` | 远程 |
 | 建表 / 补表结构 | `pnpm db:remote` | 远程，只跑 `IF NOT EXISTS`，不删数据 |
+| 升级固定金额码（已有库一次） | pnpm exec wrangler d1 execute vmq --remote -c .\wrangler.local.jsonc --file=.\migrations\20261108_fixed_amount_qrcodes.sql | 远程，新增 qrcodes 与 orders.pay_url_type |
 | 构建 + 部署 | `pnpm run deploy` | 远程 Worker |
 | 本地起服务 | `pnpm dev` | 本地 |
 | 初始化本地库 | `pnpm db:local` | 本地 |

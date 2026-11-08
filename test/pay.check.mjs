@@ -18,6 +18,7 @@ const order = {
   money: '1.00',
   truemoney: '1.01',
   pay_url: 'https://qr.alipay.com/EXAMPLE',
+  pay_url_type: 0,
   is_auto: 1,
   notify_url: 'https://example.com/notify',
   return_url: 'https://example.com/return',
@@ -117,8 +118,23 @@ const mobileWx = render(
 );
 check('微信移动端保留唤醒与保存二维码', mobileWx.includes('weixin://') && mobileWx.includes('保存二维码'));
 check('微信付款码经过本地二维码接口', mobileWx.includes(encodeURIComponent('wxp://EXAMPLE_PAY_CODE')));
+const fixedImage = render(
+  { type: 1, pay_url: '/upload/fixed-10-01.png', pay_url_type: 1, passage_id: 2 },
+  { passage: null }
+);
+check(
+  '订单级图片固定码直接展示',
+  fixedImage.includes('/upload/fixed-10-01.png') &&
+    !fixedImage.includes(encodeURIComponent('/upload/fixed-10-01.png'))
+);
 
-const direct = render({ pay_url: 'https://cdn.example.com/personal-qr.png' }, { passage: { ...passage, ewm_type: 2 } });
+const fixedText = render(
+  { type: 1, pay_url: 'wxp://FIXED_10_01', pay_url_type: 0, passage_id: 2 },
+  { passage: null }
+);
+check('订单级文本固定码现场生成二维码', fixedText.includes(encodeURIComponent('wxp://FIXED_10_01')));
+
+const direct = render({ pay_url: 'https://cdn.example.com/personal-qr.png', pay_url_type: 1 }, { passage: { ...passage, ewm_type: 2 } });
 check('直接图片收款码不再二次编码', direct.includes('src="https://cdn.example.com/personal-qr.png"'));
 
 const rmbMobile = render(

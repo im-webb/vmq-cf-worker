@@ -63,6 +63,7 @@ export interface OrderRow {
   money: string;
   truemoney: string;
   pay_url: string;
+  pay_url_type: number;
   is_auto: number;
   notify_url: string;
   return_url: string;
@@ -74,6 +75,18 @@ export interface OrderRow {
   close_time: number;
   notify_attempts: number;
   ip: string;
+}
+
+export interface QrcodeRow {
+  id: number;
+  passage_id: number;
+  price_fen: number;
+  pay_url: string;
+  ewm_type: number;
+  status: number;
+  remarks: string;
+  create_time: number;
+  update_time: number;
 }
 
 export interface PassageRow {

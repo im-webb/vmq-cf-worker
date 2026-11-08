@@ -115,6 +115,7 @@ try {
   for (const [path, name] of [
     ['/orders?page=1&limit=2', '订单'],
     ['/passages?page=1&limit=2', '通道'],
+    ['/qrcodes?page=1&limit=2', '固定金额码'],
     ['/logs?page=1&limit=2', '日志'],
     ['/admins?page=1&limit=2', '管理员'],
   ]) {
@@ -310,6 +311,59 @@ try {
       pr.app_config === wantCfg,
       `${pr.app_config} （期望 ${wantCfg || '空'}）`
     );
+    const opts = await call('GET', '/passages/options');
+    check(
+      '固定码通道下拉包含新通道',
+      opts.json?.code === 1 && (opts.json?.data ?? []).some((x) => x.id === pr.id),
+      Array.isArray(opts.json?.data) ? `count=${opts.json.data.length}` : opts.json?.msg
+    );
+
+    const fixedUrl = 'wxp://FIXED_API_TEST_0_12';
+    const fixedAdd = await call('POST', '/qrcodes', {
+      passage_id: pr.id,
+      price: '0.12',
+      pay_url: fixedUrl,
+      ewm_type: 0,
+      status: 1,
+      remarks: 'FIXED_API_TEST',
+    });
+    check('新增固定金额码', fixedAdd.json?.code === 1, fixedAdd.json?.msg ?? '');
+
+    let fixedRow = null;
+    const fixedList = await call('GET', `/qrcodes?page=1&limit=50&passage_id=${pr.id}`);
+    fixedRow = (fixedList.json?.data ?? []).find((x) => x.remarks === 'FIXED_API_TEST');
+    check('固定码金额格式化', fixedRow?.price === '0.12', fixedRow?.price ?? 'missing');
+    check('固定码内容往返', fixedRow?.pay_url === fixedUrl, fixedRow?.pay_url ?? 'missing');
+    if (fixedRow) {
+      cleanup(async () => {
+        await call('DELETE', `/qrcodes?id=${fixedRow.id}`);
+      });
+
+      const dup = await call('POST', '/qrcodes', {
+        passage_id: pr.id,
+        price: '0.12',
+        pay_url: 'wxp://DUP',
+        ewm_type: 0,
+        status: 1,
+      });
+      check('同通道同金额拒绝重复', dup.json?.code === 0, dup.json?.msg ?? '');
+
+      const edit = await call('PUT', `/qrcodes/${fixedRow.id}`, {
+        passage_id: pr.id,
+        price: '0.13',
+        pay_url: 'wxp://FIXED_API_TEST_0_13',
+        ewm_type: 0,
+        status: 1,
+        remarks: 'FIXED_API_TEST_EDIT',
+      });
+      check('编辑固定金额码', edit.json?.code === 1, edit.json?.msg ?? '');
+
+      const off = await call('PATCH', `/qrcodes/${fixedRow.id}/status`, { status: 0 });
+      check('固定码启停', off.json?.code === 1, off.json?.msg ?? '');
+
+      const delQr = await call('DELETE', `/qrcodes?id=${fixedRow.id}`);
+      check('删除固定金额码', delQr.json?.code === 1, delQr.json?.msg ?? '');
+    }
 
     // 列表筛选（对齐旧后台搜索行的字段）
 
@@ -322,12 +376,14 @@ try {
   console.log('\n=== 边界 ===');
   const unknown = await call('GET', '/nope');
   check('未知接口 404', unknown.status === 404);
-  // 固定金额码已整块下线：接口必须消失，而不是留个空实现
-  const goneQr = await call('GET', '/qrcodes');
-  check('固定金额码接口已下线 404', goneQr.status === 404, String(goneQr.status));
-  // 「所属通道」下拉只服务于固定金额码表单，随功能一起下线
-  const goneOpts = await call('GET', '/passages/options');
-  check('通道下拉接口一并下线 404', goneOpts.status === 404, String(goneOpts.status));
+  const qrList = await call('GET', '/qrcodes?page=1&limit=2');
+  check(
+    '固定金额码接口可用',
+    qrList.json?.code === 0 && Array.isArray(qrList.json?.data),
+    `count=${qrList.json?.count}`
+  );
+  const passageOpts = await call('GET', '/passages/options');
+  check('固定码通道下拉可用', passageOpts.json?.code === 1, passageOpts.json?.msg ?? '');
   const badPage = await call('GET', '/orders?page=abc&limit=999');
   check('非法分页参数不报错', badPage.json?.code === 0, `count=${badPage.json?.count}`);
 

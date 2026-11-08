@@ -64,7 +64,7 @@ function makeEnv(config = {}, rows = []) {
             return null;
           },
           async all() {
-            if (/^SELECT id, type, code/.test(sql)) return { results: rows };
+            if (/FROM passages/.test(sql) && /^SELECT[\s\S]*id, type, code/.test(sql)) return { results: rows };
             return { results: [] };
           },
         });

@@ -44,6 +44,7 @@ export async function handleSubmit(req: Request, env: Env): Promise<Response> {
         price: order.money,
         reallyPrice: order.truemoney,
         payUrl: r.payUrl ?? '',
+        payUrlType: r.payUrlType ?? r.passage?.ewm_type ?? 0,
         isAuto: r.isAuto ?? 1,
         payPage: `/pay/${order.order_id}`,
       },

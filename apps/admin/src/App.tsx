@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  QrCode,
   Receipt,
   ScrollText,
   Settings,
@@ -23,6 +24,7 @@ import { LoginPage } from '@/pages/login';
 const DashboardPage = lazy(() => import('@/pages/dashboard').then((m) => ({ default: m.DashboardPage })));
 const OrdersPage = lazy(() => import('@/pages/orders').then((m) => ({ default: m.OrdersPage })));
 const PassagesPage = lazy(() => import('@/pages/passages').then((m) => ({ default: m.PassagesPage })));
+const QrcodesPage = lazy(() => import('@/pages/qrcodes').then((m) => ({ default: m.QrcodesPage })));
 const LogsPage = lazy(() => import('@/pages/logs').then((m) => ({ default: m.LogsPage })));
 const AdminsPage = lazy(() => import('@/pages/admins').then((m) => ({ default: m.AdminsPage })));
 const ConfigPage = lazy(() => import('@/pages/config').then((m) => ({ default: m.ConfigPage })));
@@ -43,6 +45,7 @@ const NAV: Array<{
     items: [
       { path: '/orders', label: '订单管理', icon: Receipt },
       { path: '/passages', label: '通道管理', icon: Wallet },
+      { path: '/qrcodes', label: '固定金额码', icon: QrCode },
     ],
   },
   {
@@ -194,6 +197,7 @@ function Guarded() {
         <Route path="/" element={<DashboardPage />} />
         <Route path="/orders" element={<OrdersPage />} />
         <Route path="/passages" element={<PassagesPage />} />
+        <Route path="/qrcodes" element={<QrcodesPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/admins" element={<AdminsPage />} />
         <Route path="/config" element={<ConfigPage />} />

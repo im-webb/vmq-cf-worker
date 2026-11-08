@@ -163,6 +163,8 @@ export const apiDoc: DocDefinition = {
     { label: '订单金额', name: 'data.price', type: 'String', example: '1.00', description: '下单时提交的金额。' },
     { label: '实际支付金额', name: 'data.reallyPrice', type: 'String', example: '1.01', description: '为区分并发订单，实际收款金额可能与订单金额不同。' },
     { label: '收款码内容', name: 'data.payUrl', type: 'String', example: 'https://qr.alipay.com/...', description: '当前通道的收款码载荷，可根据业务需要生成二维码。' },
+    { label: '是否回退默认码', name: 'data.isAuto', type: 'Int', example: '0', description: '0 表示命中固定金额码；1 表示未命中并回退通道默认无金额码。' },
+    { label: '二维码类型', name: 'data.payUrlType', type: 'Int', example: '0', description: '0 表示 payUrl 是二维码文本，需要生成二维码；1 表示 payUrl 是图片地址，应直接展示。' },
     { label: '支付页面', name: 'data.payPage', type: 'String', example: '/pay/20261029120000123456', description: '平台收银台相对地址，拼接站点域名后可跳转。' },
   ],
   responseExample: String.raw`{
@@ -175,6 +177,7 @@ export const apiDoc: DocDefinition = {
     "price": "1.00",
     "reallyPrice": "1.00",
     "payUrl": "收款码内容",
+    "payUrlType": 0,
     "isAuto": 1,
     "payPage": "/pay/20261029120000123456"
   }
@@ -183,6 +186,7 @@ export const apiDoc: DocDefinition = {
     'format=json 也参与签名；示例先将它放入参数数组，再统一排序和计算签名。',
     'payPage 是相对路径，跳转前需要拼接当前站点域名。',
     'reallyPrice 是实际应收金额，对账和支付结果处理应以通知中的 really_money 为准。',
+    '固定金额码按实际应付金额和支付类型精确匹配；未配置对应金额时自动回退默认无金额码。',
   ],
   code: apiExample,
 };
