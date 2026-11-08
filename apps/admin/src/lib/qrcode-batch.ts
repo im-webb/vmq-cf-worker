@@ -38,6 +38,52 @@ export function parseAmountFromFilename(filename: string): string {
   return separated.at(-1)?.[1] ?? '';
 }
 
+/** 从二维码载荷的查询参数中识别金额，不猜测无明确字段名的数字。 */
+export function parseAmountFromQrContent(value: string): string {
+  try {
+    const url = new URL(value.trim());
+    const keys = ['amount', 'money', 'price', 'total', 'total_fee', 'fee', 'pay_amount'];
+    for (const key of keys) {
+      const raw = url.searchParams.get(key)?.trim() ?? '';
+      if (/^\d+(?:\.\d{1,2})?$/.test(raw) && Number(raw) > 0) {
+        return Number(raw).toFixed(2);
+      }
+    }
+  } catch {
+    /* 非 URL 二维码内容不处理 */
+  }
+  return '';
+}
+
+/**
+ * 给没有金额的行按起始金额和步长自动填充，并避让已有金额。
+ * 返回新数组，不修改复核项的其他字段。
+ */
+export function fillMissingBatchAmounts<T extends BatchImportItem>(
+  items: T[],
+  startPrice: string,
+  stepPrice: string
+): T[] {
+  const startFen = amountKey(startPrice.trim());
+  const stepFen = amountKey(stepPrice.trim());
+  if (startFen === null || stepFen === null) return items;
+
+  const used = new Set<number>();
+  for (const item of items) {
+    const key = amountKey(item.price.trim());
+    if (key !== null) used.add(key);
+  }
+
+  let cursor = startFen;
+  return items.map((item) => {
+    if (item.price.trim()) return item;
+    while (used.has(cursor)) cursor += stepFen;
+    used.add(cursor);
+    const price = (cursor / 100).toFixed(2);
+    cursor += stepFen;
+    return { ...item, price };
+  });
+}
 function stripQuotes(value: string): string {
   const v = value.trim();
   if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {

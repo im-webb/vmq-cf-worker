@@ -10,7 +10,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { api, ApiError, uploadImage } from '@/lib/api';
 import { decodeQrFile } from '@/lib/qr-decode';
 import {
+  fillMissingBatchAmounts,
+  isImageAddress,
   parseAmountFromFilename,
+  parseAmountFromQrContent,
   parseBatchText,
   validateBatchItems,
   type BatchImportItem,
@@ -25,6 +28,8 @@ interface PassageOption {
 
 interface BatchRow extends BatchImportItem {
   id: string;
+  previewUrl?: string;
+  objectUrl?: boolean;
 }
 
 const PAY_TYPES: Record<number, string> = {
@@ -56,15 +61,65 @@ export function QrcodeBatchDialog({
   const [rows, setRows] = useState<BatchRow[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [imageMode, setImageMode] = useState<'decode' | 'image'>('decode');
+  const [fallbackStart, setFallbackStart] = useState('0.10');
+  const [fallbackStep, setFallbackStep] = useState('0.01');
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const seq = useRef(0);
+  const objectUrls = useRef<Set<string>>(new Set());
 
   const nextId = () => `${Date.now()}-${++seq.current}`;
 
+  function revokeAllObjectUrls() {
+    for (const url of objectUrls.current) URL.revokeObjectURL(url);
+    objectUrls.current.clear();
+  }
+
+  function previewOf(row: BatchRow) {
+    if (row.previewUrl) return row.previewUrl;
+    if (row.ewmType === 1 && isImageAddress(row.payUrl)) return row.payUrl;
+    return row.payUrl ? `/enQrcode?url=${encodeURIComponent(row.payUrl)}&size=8` : '';
+  }
+
+  function removeRow(id: string) {
+    setRows((prev) => {
+      const target = prev.find((row) => row.id === id);
+      if (target?.objectUrl && target.previewUrl) {
+        URL.revokeObjectURL(target.previewUrl);
+        objectUrls.current.delete(target.previewUrl);
+      }
+      return prev.filter((row) => row.id !== id);
+    });
+  }
+
+  function clearRows() {
+    revokeAllObjectUrls();
+    setRows([]);
+    setErrors([]);
+  }
+
+  function applyAmountRule() {
+    const before = rows.filter((row) => !row.price.trim()).length;
+    if (!before) {
+      toast.error('当前没有空白金额需要填充');
+      return;
+    }
+    const filled = fillMissingBatchAmounts(rows, fallbackStart, fallbackStep);
+    setRows(filled);
+    setErrors([]);
+    const after = filled.filter((row) => !row.price.trim()).length;
+    toast.success(after ? `已填充 ${before - after} 条，仍有 ${after} 条需检查` : `已填充 ${before} 条`);
+  }
+
+  function handleOpenChange(next: boolean) {
+    if (!next) revokeAllObjectUrls();
+    onOpenChange(next);
+  }
+
   useEffect(() => {
     if (!open) return;
+    revokeAllObjectUrls();
     const first = passages.find((p) => p.status === 1) ?? passages[0];
     setTab('text');
     setPassageId(first ? String(first.id) : '');
@@ -74,9 +129,13 @@ export function QrcodeBatchDialog({
     setRows([]);
     setErrors([]);
     setImageMode('decode');
+    setFallbackStart('0.10');
+    setFallbackStep('0.01');
     setBusy(false);
     setBusyLabel('');
   }, [open, passages]);
+
+  useEffect(() => () => revokeAllObjectUrls(), []);
 
   function updateRow(id: string, patch: Partial<BatchRow>) {
     setErrors([]);
@@ -115,19 +174,27 @@ export function QrcodeBatchDialog({
         try {
           let payUrl = '';
           let ewmType: 0 | 1 = 0;
+          let previewUrl = '';
+          let objectUrl = false;
           if (imageMode === 'decode') {
             payUrl = (await decodeQrFile(file)) ?? '';
             if (!payUrl) throw new Error('未识别出二维码');
+            previewUrl = URL.createObjectURL(file);
+            objectUrls.current.add(previewUrl);
+            objectUrl = true;
           } else {
             payUrl = await uploadImage(file);
             ewmType = 1;
+            previewUrl = payUrl;
           }
           next.push({
             id: nextId(),
-            price: parseAmountFromFilename(file.name),
+            price: parseAmountFromFilename(file.name) || parseAmountFromQrContent(payUrl),
             payUrl,
             ewmType,
             source: file.name,
+            previewUrl,
+            objectUrl,
           });
         } catch (error) {
           nextErrors.push(`${file.name}：${error instanceof Error ? error.message : '处理失败'}`);
@@ -140,8 +207,11 @@ export function QrcodeBatchDialog({
     }
 
     if (next.length) {
-      setRows((prev) => [...prev, ...next].slice(0, MAX_ROWS));
-      toast.success(`已加入 ${next.length} 张图片，请复核金额`);
+      setRows((prev) => {
+        const combined = [...prev, ...next].slice(0, MAX_ROWS);
+        return fillMissingBatchAmounts(combined, fallbackStart, fallbackStep);
+      });
+      toast.success(`已加入 ${next.length} 张图片，空白金额已按规则预填，请复核`);
     }
     if (nextErrors.length) {
       setErrors(nextErrors);
@@ -191,7 +261,7 @@ export function QrcodeBatchDialog({
       });
       toast.success(result.msg || '批量添加成功');
       onCompleted();
-      onOpenChange(false);
+      handleOpenChange(false);
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : '批量添加失败');
     } finally {
@@ -203,7 +273,7 @@ export function QrcodeBatchDialog({
   const readyCount = rows.length;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-[900px]">
         <DialogHeader>
           <DialogTitle>批量添加固定金额码</DialogTitle>
@@ -301,8 +371,33 @@ export function QrcodeBatchDialog({
                   </Select>
                 </div>
                 <div className="rounded-md bg-muted px-3 py-2 text-xs leading-5 text-muted-foreground">
-                  文件名中的金额会自动填入，例如 <code>10.00.png</code>、<code>qrcode_10.01.webp</code>。
-                  未识别到金额时会留空，必须在复核列表手动补充。
+                  先尝试从文件名和二维码参数识别金额；仍无法识别时，按下方“起始金额 + 步长”预填。
+                  所有结果都需要人工复核。
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-[160px_160px_1fr]">
+                <div className="space-y-1.5">
+                  <Label htmlFor="fallback-start">兜底起始金额</Label>
+                  <Input
+                    id="fallback-start"
+                    value={fallbackStart}
+                    inputMode="decimal"
+                    onChange={(e) => setFallbackStart(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="fallback-step">递增步长</Label>
+                  <Input
+                    id="fallback-step"
+                    value={fallbackStep}
+                    inputMode="decimal"
+                    onChange={(e) => setFallbackStep(e.target.value)}
+                  />
+                </div>
+                <div className="flex items-end">
+                  <Button variant="outline" onClick={applyAmountRule} disabled={busy || !rows.length}>
+                    按规则填充空白金额
+                  </Button>
                 </div>
               </div>
               <input
@@ -337,7 +432,7 @@ export function QrcodeBatchDialog({
               </p>
             </div>
             {rows.length ? (
-              <Button variant="ghost" size="sm" onClick={() => { setRows([]); setErrors([]); }}>
+              <Button variant="ghost" size="sm" onClick={clearRows}>
                 <Trash2 /> 清空
               </Button>
             ) : null}
@@ -349,6 +444,7 @@ export function QrcodeBatchDialog({
                 <thead className="sticky top-0 z-10 bg-muted text-left text-xs text-muted-foreground">
                   <tr>
                     <th className="w-28 px-3 py-2">金额</th>
+                    <th className="w-16 px-2 py-2">预览</th>
                     <th className="w-28 px-2 py-2">码类型</th>
                     <th className="px-2 py-2">来源</th>
                     <th className="w-12 px-2 py-2" />
@@ -370,6 +466,24 @@ export function QrcodeBatchDialog({
                           />
                         </td>
                         <td className="px-2 py-2">
+                          {previewOf(row) ? (
+                            <a
+                              href={previewOf(row)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block size-12 overflow-hidden rounded border border-border bg-white"
+                              title="打开图片预览"
+                            >
+                              <img
+                                src={previewOf(row)}
+                                alt={`第 ${index + 1} 条收款码预览`}
+                                className="size-full object-contain"
+                              />
+                            </a>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </td>                        <td className="px-2 py-2">
                           <Select
                             value={String(row.ewmType)}
                             onValueChange={(v) => updateRow(row.id, { ewmType: v === '1' ? 1 : 0 })}
@@ -393,7 +507,7 @@ export function QrcodeBatchDialog({
                             variant="ghost"
                             size="icon"
                             aria-label={`移除第 ${index + 1} 条`}
-                            onClick={() => setRows((prev) => prev.filter((x) => x.id !== row.id))}
+                            onClick={() => removeRow(row.id)}
                           >
                             <Trash2 />
                           </Button>
@@ -419,7 +533,7 @@ export function QrcodeBatchDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={busy}>
             取消
           </Button>
           <Button onClick={() => void submit()} disabled={busy || !rows.length}>
