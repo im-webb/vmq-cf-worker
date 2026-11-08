@@ -365,6 +365,41 @@ try {
       check('删除固定金额码', delQr.json?.code === 1, delQr.json?.msg ?? '');
     }
 
+    const batchAdd = await call('POST', '/qrcodes/batch', {
+      passage_id: pr.id,
+      status: 1,
+      remarks: 'BATCH_API_TEST',
+      items: [
+        { price: '0.17', pay_url: 'wxp://BATCH_API_TEST_0_17', ewm_type: 0 },
+        { price: '0.18', pay_url: '/upload/batch-api-0-18.png', ewm_type: 1 },
+      ],
+    });
+    check(
+      '批量新增固定金额码',
+      batchAdd.json?.code === 1 && batchAdd.json?.data?.inserted === 2,
+      batchAdd.json?.msg ?? ''
+    );
+
+    const batchList = await call('GET', `/qrcodes?page=1&limit=50&passage_id=${pr.id}`);
+    const batchRows = (batchList.json?.data ?? []).filter((x) => x.remarks === 'BATCH_API_TEST');
+    check('批量新增数量正确', batchRows.length === 2, `count=${batchRows.length}`);
+    check('批量图片码类型正确', batchRows.some((x) => x.ewm_type === 1));
+    if (batchRows.length) {
+      cleanup(async () => {
+        await call('DELETE', `/qrcodes?ids=${batchRows.map((x) => x.id).join(',')}`);
+      });
+    }
+
+    const batchDup = await call('POST', '/qrcodes/batch', {
+      passage_id: pr.id,
+      status: 1,
+      items: [
+        { price: '0.19', pay_url: 'wxp://BATCH_API_TEST_0_19', ewm_type: 0 },
+        { price: '0.17', pay_url: 'wxp://BATCH_DUP', ewm_type: 0 },
+      ],
+    });
+    check('批量导入与已有金额冲突整批拒绝', batchDup.json?.code === 0, batchDup.json?.msg ?? '');
+
     // 列表筛选（对齐旧后台搜索行的字段）
 
     const st = await call('PATCH', `/passages/${pr.id}/status`, { status: 0 });

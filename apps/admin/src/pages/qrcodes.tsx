@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, QrCode, RefreshCw, Trash2 } from 'lucide-react';
+import { Plus, QrCode, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +19,7 @@ import {
 import { EmptyRow, PageHeader, Panel, Pagination, Toolbar } from '@/components/page-shell';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { QrCodeField } from '@/components/qr-code-field';
+import { QrcodeBatchDialog } from '@/components/qrcode-batch-dialog';
 import { api, ApiError } from '@/lib/api';
 
 interface QrcodeRow {
@@ -80,6 +81,7 @@ export function QrcodesPage() {
   const [selected, setSelected] = useState<number[]>([]);
   const [form, setForm] = useState<FormState | null>(null);
   const [qr, setQr] = useState<{ src: string; title: string } | null>(null);
+  const [batchOpen, setBatchOpen] = useState(false);
   const [confirm, setConfirm] = useState<{
     open: boolean;
     title: string;
@@ -179,6 +181,13 @@ export function QrcodesPage() {
           <Plus /> 新增固定码
         </Button>
         <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setBatchOpen(true)}
+          disabled={!options.data?.length}
+        >
+          <Upload /> 批量添加
+        </Button>        <Button
           variant="outline"
           size="sm"
           onClick={() => void qc.invalidateQueries({ queryKey: ['qrcodes'] })}
@@ -410,6 +419,12 @@ export function QrcodesPage() {
         </DialogContent>
       </Dialog>
 
+      <QrcodeBatchDialog
+        open={batchOpen}
+        onOpenChange={setBatchOpen}
+        passages={options.data ?? []}
+        onCompleted={() => void qc.invalidateQueries({ queryKey: ['qrcodes'] })}
+      />
       <Dialog open={!!qr} onOpenChange={(v) => !v && setQr(null)}>
         <DialogContent className="sm:max-w-[420px]">
           <DialogHeader>

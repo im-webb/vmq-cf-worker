@@ -32,8 +32,10 @@ import {
   passageOptions,
   removeQrcodes,
   saveQrcode,
+  saveQrcodeBatch,
   setQrcodeStatus,
 } from '../modules/qrcodes/qrcode.service';
+import type { QrcodeBatchPayload } from '../modules/qrcodes/qrcode.service';
 import {
   changePassword,
   listAdmins,
@@ -117,6 +119,18 @@ export async function handleAdminApi(req: Request, env: Env, sub: string): Promi
     const file = form.get('file');
     if (!(file instanceof File)) return replyFail('没有收到文件');
     return reply(await saveUpload(env, file));
+  }
+
+  /* ---------- 固定码批量导入必须先读 JSON，不能走扁平参数解析 ---------- */
+  if (path === '/qrcodes/batch' && method === 'POST') {
+    if (!session) return unauthorized();
+    let payload: QrcodeBatchPayload;
+    try {
+      payload = (await req.json()) as QrcodeBatchPayload;
+    } catch {
+      return replyFail('批量导入数据格式不正确');
+    }
+    return reply(await saveQrcodeBatch(env, payload));
   }
 
   /* ---------- 其余接口都要登录 ---------- */

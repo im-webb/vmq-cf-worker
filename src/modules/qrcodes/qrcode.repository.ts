@@ -149,14 +149,21 @@ export async function passageOptions(db: D1Database): Promise<PassageOptionRow[]
   return rows.results;
 }
 
-export async function insert(db: D1Database, data: QrcodeInput): Promise<number> {
-  const t = now();
-  const r = await db
-    .prepare(
-      `INSERT INTO qrcodes
-        (passage_id, price_fen, pay_url, ewm_type, status, remarks, create_time, update_time)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
+export async function existingPrices(db: D1Database, passageId: number): Promise<Set<number>> {
+  const rows = await db
+    .prepare('SELECT price_fen FROM qrcodes WHERE passage_id = ?')
+    .bind(passageId)
+    .all<{ price_fen: number }>();
+  return new Set(rows.results.map((row) => Number(row.price_fen)));
+}
+
+const INSERT_SQL = `INSERT INTO qrcodes
+  (passage_id, price_fen, pay_url, ewm_type, status, remarks, create_time, update_time)
+ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+
+function bindInsert(db: D1Database, data: QrcodeInput, t: number) {
+  return db
+    .prepare(INSERT_SQL)
     .bind(
       data.passage_id,
       data.price_fen,
@@ -166,9 +173,22 @@ export async function insert(db: D1Database, data: QrcodeInput): Promise<number>
       data.remarks,
       t,
       t
-    )
-    .run();
+    );
+}
+
+export async function insert(db: D1Database, data: QrcodeInput): Promise<number> {
+  const t = now();
+  const r = await bindInsert(db, data, t).run();
   return Number(r.meta.last_row_id ?? 0);
+}
+
+/** 多行一次提交，D1 batch 在同一事务中执行。 */
+export async function insertMany(db: D1Database, rows: QrcodeInput[]): Promise<number> {
+  if (!rows.length) return 0;
+  const t = now();
+  const statements = rows.map((row) => bindInsert(db, row, t));
+  await db.batch(statements);
+  return rows.length;
 }
 
 export async function update(db: D1Database, id: number, data: QrcodeInput): Promise<void> {
