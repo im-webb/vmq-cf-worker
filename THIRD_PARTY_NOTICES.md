@@ -87,6 +87,8 @@ SOFTWARE.
 | `@radix-ui/react-slot` | 后台 / 前台 | MIT |
 | `@radix-ui/react-tabs` | 后台 | MIT |
 | `@tanstack/react-query` | 后台 | MIT |
+| `@tesseract.js-data/eng` | 后台（固定金额码图片 OCR） | MIT |
+| `tesseract.js` | 后台（固定金额码图片 OCR） | Apache-2.0 |
 | `class-variance-authority` | 后台 / 前台 | Apache-2.0 |
 | `clsx` | 后台 / 前台 | MIT |
 | `date-fns` | 后台 | MIT |
@@ -116,6 +118,8 @@ SOFTWARE.
 - `lightningcss`：MPL-2.0
 - `caniuse-lite`：CC-BY-4.0，数据来源于 <https://caniuse.com/>，版权归 caniuse 贡献者所有
 - `browserslist`、`postcss`、`rollup`、`esbuild` 等：MIT
+
+`apps/admin/public/ocr/` 下的 OCR worker/core 与英文训练数据来自 Tesseract.js / Tesseract / tessdata 生态，用于在浏览器本地识别固定金额码图片；相关上游分别按 Apache-2.0 或包内声明的许可证发布。
 
 Apache-2.0 全文见 [licenses/Apache-2.0.txt](./licenses/Apache-2.0.txt)；其他许可证可在 <https://spdx.org/licenses/> 查阅。
 
