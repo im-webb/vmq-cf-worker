@@ -53,3 +53,26 @@ export function yuanToFen(yuan: string): number | null {
   const [intPart, decPart = ''] = yuan.split('.');
   return Number(intPart) * 100 + Number(decPart.padEnd(2, '0'));
 }
+
+/**
+ * 把任意写法的金额归一成「两位小数的元」字符串，非法值返回 null。
+ *
+ * 只给到账匹配用：orders.truemoney 是 fenToYuan() 写进去的，**恒为两位小数**
+ * （"0.12"），而监控端 App 推上来的 price 是通知里抓出来的原文，
+ * 有可能是 "0.120"、"0.1"、" 0.12 "。直接拿字符串跟库里比，
+ * 这些写法都会匹配失败 —— 用户真付了钱，订单却永远停在待支付，
+ * 钱和单就此对不上（只落一条 unmatched_push，后台还看不到）。
+ *
+ * 所以比较前先把两边都过一遍分（整数）再折回元，禁止绕过这一步。
+ */
+export function normalizeYuan(yuan: string): string | null {
+  const fen = yuanToFen(yuan.trim());
+  return fen === null ? null : fenToYuan(fen);
+}
+
+/**
+ * 金额 → 分（整数）。用于需要数值比较的地方，非法值返回 null。
+ */
+export function toFen(yuan: string): number | null {
+  return yuanToFen(yuan.trim());
+}

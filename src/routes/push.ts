@@ -1,7 +1,7 @@
 import type { Env, OrderRow } from '../lib/db';
 import { appSecret, getConfigInt, STATUS } from '../lib/db';
 import { enqueueNotify, tryNotifyNow } from '../lib/notify';
-import { releasePrice } from '../lib/amount';
+import { fenToYuan, toFen } from '../lib/amount';
 import { verifyMonitor } from '../lib/sign';
 import { clientIp, json, now, readParams } from '../lib/util';
 
@@ -69,19 +69,32 @@ export async function handlePush(req: Request, env: Env, ctx?: ExecutionContext)
   ).bind(ts).run();
 
   const typeNum = Number(type);
-  // 金额唯一性由 tmp_price 保证：同一 (金额, 类型) 只可能有一笔待支付订单
-  const order = await env.DB.prepare(
-    'SELECT * FROM orders WHERE truemoney = ? AND status = ? AND type = ? ORDER BY id LIMIT 1'
-  )
-    .bind(price, STATUS.PENDING, typeNum)
-    .first<OrderRow>();
+  // 金额唯一性由 tmp_price 保证：同一 (金额, 类型) 只可能有一笔待支付订单。
+  //
+  // ⚠️ 必须按「分」比较，不能直接比字符串：orders.truemoney 是 fenToYuan() 写的
+  //    两位小数（"0.12"），而监控端 App 传上来的 price 是通知原文，可能写成
+  //    "0.1" / "0.120"。字符串相等一旦不成立，钱到了也匹配不到订单。
+  //    这里两边都折算成分（整数），历史行里格式不规范的也能对上。
+  const priceFen = toFen(price);
+  const order =
+    priceFen === null
+      ? null
+      : await env.DB.prepare(
+          'SELECT * FROM orders ' +
+            'WHERE CAST(ROUND(truemoney * 100) AS INTEGER) = ? AND status = ? AND type = ? ' +
+            'ORDER BY id LIMIT 1'
+        )
+          .bind(priceFen, STATUS.PENDING, typeNum)
+          .first<OrderRow>();
 
   if (!order) {
-    // 不污染订单表，单独记录
+    // 不污染订单表，单独记录。
+    // 存归一化后的金额，方便后台/巡检按「分」去核对，也免得同一个金额
+    // 因为 "0.1" / "0.10" 两种写法在表里出现两条。
     await env.DB.prepare(
       'INSERT INTO unmatched_push (type, price, pid, t, sign, src_ip, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     )
-      .bind(type, price, pid, t, sign, clientIp(req), ts)
+      .bind(type, priceFen === null ? price : fenToYuan(priceFen), pid, t, sign, clientIp(req), ts)
       .run();
     return json({ code: 0, msg: '无匹配订单，已记录' });
   }
@@ -115,7 +128,29 @@ export async function handlePush(req: Request, env: Env, ctx?: ExecutionContext)
   // ⚠️ 用 waitUntil 在后台跑，**绝不能 await**：商户回调最坏要 10 秒（超时），
   // 一旦同步等待，监控端 App 的推送请求会被拖住，用户侧体感就是"到账慢"。
   // 订单在上面已经置为已支付，页面轮询不受影响；回调失败还有 cron 重试兜底。
-  const taskId = await enqueueNotify(env, order);
+  //
+  // ⚠️ 但「入队」这一步本身可能失败（D1 抖动、写配额超限）。以前它裸奔在
+  //    订单已置 PAID 之后：一旦抛错，订单永久停在「已支付」、notify_task 里
+  //    一条记录都没有，cron 也就永远重试不到 —— 钱收了，商户永远收不到回调。
+  //    所以这里必须兜住：失败时把订单降级成「回调失败」(2)，
+  //    后台能看见、能点「补单」，而不是无声无息地躺在成功状态里。
+  let taskId = 0;
+  try {
+    taskId = await enqueueNotify(env, order);
+  } catch (e) {
+    console.error('[appPush] enqueueNotify failed', order.order_id, e);
+    try {
+      await env.DB.prepare('UPDATE orders SET status = ? WHERE order_id = ? AND status = ?')
+        .bind(STATUS.NOTIFY_FAILED, order.order_id, STATUS.PAID)
+        .run();
+    } catch (e2) {
+      console.error('[appPush] mark NOTIFY_FAILED failed', order.order_id, e2);
+    }
+    // 仍然回 code 0（对 App 而言这笔推送已被接收）：让 App 重推只会因订单
+    // 已不是待支付而落进 unmatched_push，反而掩盖真问题。
+    return json({ code: 0, msg: '成功（回调入队失败，已标记回调失败）' });
+  }
+
   if (ctx) ctx.waitUntil(tryNotifyNow(env, taskId));
   else await tryNotifyNow(env, taskId); // 本地/测试环境没有 ctx 时退回同步
 

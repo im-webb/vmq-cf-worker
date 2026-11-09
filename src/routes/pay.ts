@@ -1,5 +1,5 @@
 import type { Env, PassageRow } from '../lib/db';
-import { getConfigInt, STATUS } from '../lib/db';
+import { getOrderTimeoutMinutes, STATUS } from '../lib/db';
 import { getOrder } from '../lib/order';
 import { loadSettings, staticBase } from '../lib/page';
 import { renderPayPage } from '../templates/pay';
@@ -18,8 +18,8 @@ export async function handlePayPage(env: Env, req: Request, orderId: string): Pr
           .first<PassageRow>()
       : Promise.resolve(null),
   ]);
-  const configuredTimeout = Number.parseInt(settings['order_timeout'] ?? settings['close'] ?? '5', 10);
-  const closeMinutes = Number.isFinite(configuredTimeout) ? configuredTimeout : 5;
+  // 倒计时用的超时口径必须与 cron 关单一致，否则用户会照着一张已被关单的码付款
+  const closeMinutes = await getOrderTimeoutMinutes(env);
 
   const body = renderPayPage(order, {
     resourceUrl: staticBase(settings, env),
@@ -67,7 +67,7 @@ export async function handleOrderStatus(env: Env, orderId: string): Promise<Resp
       status: order.status,
       truemoney: order.truemoney,
       payTime: order.pay_time,
-      expireAt: order.create_time + (await getConfigInt(env, 'order_timeout', 5)) * 60,
+      expireAt: order.create_time + (await getOrderTimeoutMinutes(env)) * 60,
       now: now(),
     },
   });
