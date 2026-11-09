@@ -1,6 +1,7 @@
 import type { Env } from './lib/db';
 import { getOrderTimeoutMinutes, STATUS } from './lib/db';
 import { deliverTask } from './lib/notify';
+import { pruneAuthAttempts } from './lib/auth-throttle';
 import { now } from './lib/util';
 
 /**
@@ -68,4 +69,7 @@ export async function runCron(env: Env): Promise<void> {
   )
     .bind(STATUS.PENDING)
     .run();
+
+  // 5) 清理过期登录失败记录
+  await pruneAuthAttempts(env);
 }

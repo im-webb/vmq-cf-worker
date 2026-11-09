@@ -215,6 +215,17 @@ export async function setAdminStatus(
   await db.prepare('UPDATE admins SET status = ? WHERE id = ?').bind(status, id).run();
 }
 
+/** 统计启用中的超级管理员，可排除指定 id。 */
+export async function countActiveSuperAdmins(
+  db: D1Database,
+  excludeIds: number[] = []
+): Promise<number> {
+  let sql = "SELECT COUNT(*) AS c FROM admins WHERE role = 1 AND status = 1";
+  if (excludeIds.length) sql += ` AND id NOT IN (${marks(excludeIds.length)})`;
+  const row = await db.prepare(sql).bind(...excludeIds).first<{ c: number }>();
+  return Number(row?.c ?? 0);
+}
+
 /* ============================ 站点配置 ============================ */
 
 export async function allConfig(db: D1Database): Promise<Record<string, string>> {

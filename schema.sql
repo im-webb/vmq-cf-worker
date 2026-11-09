@@ -141,6 +141,14 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 CREATE INDEX IF NOT EXISTS idx_logs_time ON logs(create_time);
 
+-- 登录失败窗口：按账号/IP 记录最近失败，不存密码或令牌
+CREATE TABLE IF NOT EXISTS auth_attempt (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  bucket     TEXT    NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_auth_attempt_bucket ON auth_attempt(bucket, created_at);
+
 -- 后台上传的图片（收款码等）。存 D1 而不引 R2，省一个绑定
 CREATE TABLE IF NOT EXISTS uploads (
   hash       TEXT PRIMARY KEY,

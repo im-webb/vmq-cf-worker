@@ -136,7 +136,7 @@ pnpm run deploy
 
 提交后直接跳到登录页 `/<别名>/login`，用刚设置的账号登录即可。
 
-通讯密钥在安装时自动生成（32 位十六进制），之后可以在后台「系统配置 → 密钥管理」查看并复制完整值；填新值保存才会覆盖，留空保存表示保持不变。它是后台管理员和商户、监控端共用的敏感信息，请勿泄露。
+通讯密钥在安装时自动生成（32 位十六进制），之后可在后台「系统配置 → 密钥管理」点击查看。查看明文时必须再次输入当前账号密码，并会写入操作日志；填新值保存才会覆盖，留空保存表示保持不变。它是后台管理员和商户、监控端共用的敏感信息，请勿泄露。
 
 初始化完成后 `/setup` 自动关闭（再次访问返回 404）。
 
@@ -148,7 +148,12 @@ pnpm run deploy
 > ```
 >
 > 之后必须用 `/setup?token=<令牌>` 打开；表单里会自动带上令牌，提交不需要手动加。
-> 初始化完成后可以删掉：`npx wrangler secret delete SETUP_TOKEN`。
+> 建议保留此令牌：初始化后即使 `admins` 表被误清空，`/setup` 也只有携带正确令牌才会重新开放。
+> 如果删除令牌，重置管理员请使用 `node scripts/reset-admin.mjs`；不要依赖清空管理员表来接管实例。
+
+> **反向代理**：代码默认不信任 `X-Forwarded-*`。只有 Worker 前面还有 nginx/其它反代且 Host 被改写时，才需要同时配置
+> `TRUST_PROXY=1` 和 `TRUSTED_HOSTS=<对外域名，逗号分隔>`；否则伪造转发头无法影响支付跳转或初始化域名。
+> 开启后必须阻止客户端绕过反代直连 Worker，否则伪造白名单 Host 仍可能生效。
 
 ### 7. 后台配置
 
@@ -235,6 +240,7 @@ https://your-domain.com/通讯密钥/通道id,支付类型      例：https://pa
 | 新建 D1 库 | `pnpm db:create` | 远程 |
 | 建表 / 补表结构 | `pnpm db:remote` | 远程，只跑 `IF NOT EXISTS`，不删数据 |
 | 升级固定金额码（已有库一次） | pnpm exec wrangler d1 execute vmq --remote -c .\wrangler.local.jsonc --file=.\migrations\20261108_fixed_amount_qrcodes.sql | 远程，新增 qrcodes 与 orders.pay_url_type |
+| 安全加固迁移（已有库一次） | pnpm exec wrangler d1 execute vmq --remote -c .\wrangler.local.jsonc --file=.\migrations\20261109_security_hardening.sql | 远程，新增登录失败限流表 |
 | 构建 + 部署 | `pnpm run deploy` | 远程 Worker |
 | 本地起服务 | `pnpm dev` | 本地 |
 | 初始化本地库 | `pnpm db:local` | 本地 |
@@ -465,13 +471,10 @@ money, really_money, name, sitename, sign, sign_type=MD5
 监控端 60 秒没心跳就会拒单。检查 App 是否被系统杀掉（需要保活 / 自启动权限），或在后台把 `require_online` 改成 0 临时放开。
 
 **Q：忘记管理员密码？**
-在 D1 里清空管理员表，重新访问 `/setup`：
 
-```sql
-DELETE FROM admins;
-```
+不要直接把实例交给公开的 `/setup`。本地可运行 `pnpm admin -- --user <账号> --pass <新密码>` 重置；远程环境可运行 `node scripts/reset-admin.mjs`，按脚本输出执行对应的 D1 命令。
 
-再打开 `/setup` 重设账号。**通讯密钥不会被重新生成**，监控端不用重新绑定。
+如果确实要通过 `/setup` 重建管理员：必须先配置并保留 `SETUP_TOKEN`，再清空 `admins`，最后用 `/setup?token=<令牌>` 打开。没有正确令牌时，已初始化实例即使管理员表为空也返回 404。通讯密钥不会因重建管理员而自动变化。
 
 **Q：上传图片提示"编码后超出数据库单条上限"？**
 图片以 base64 存 D1，D1 单个值上限 2MB，所以原始文件限制在 1.4MB。收款码通常只有几十 KB，够用。要传大图建议改用 R2。

@@ -1,3 +1,11 @@
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Content-Security-Policy: frame-ancestors 'none'; object-src 'none'; base-uri 'self'
+  Strict-Transport-Security: max-age=31536000
+
 # 静态资源已随 Worker 发布，走 Cloudflare 边缘缓存。
 # 一天缓存：改资源后重新部署即生效（文件名不带 hash，别设 immutable）。
 /static/*

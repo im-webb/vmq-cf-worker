@@ -8,6 +8,10 @@ export interface Env {
   ADMIN_ALIAS?: string;
   /** 可选：首次初始化的令牌。配了之后 /setup 必须带同样的 ?token=，防止被人抢先初始化 */
   SETUP_TOKEN?: string;
+  /** 仅在明确挂在反向代理后时设为 1；默认不信任 X-Forwarded-* */
+  TRUST_PROXY?: string;
+  /** TRUST_PROXY=1 时允许的对外 Host，逗号分隔；为空则仍不信任转发头 */
+  TRUSTED_HOSTS?: string;
 }
 
 /** 后台别名（去掉首尾斜杠），没配就用 admin */

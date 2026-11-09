@@ -157,11 +157,7 @@ https://vmq.<your-subdomain>.workers.dev/setup?token=<上一步生成的令牌>
 
 填写管理员账号、密码、后台别名和站点名称。提交成功后应跳转到后台登录页。
 
-初始化完成后可删除令牌：
-
-```bash
-npx wrangler secret delete SETUP_TOKEN -c "$(node scripts/cfg.mjs)"
-```
+建议保留令牌。初始化完成后 `/setup` 仍会关闭；但如果 `admins` 表被误清空，只有携带正确 `SETUP_TOKEN` 才允许重新初始化。若删除令牌，重置管理员请使用 `scripts/reset-admin.mjs` 生成命令，而不是依赖公开 `/setup`。
 
 验证配置键：
 
@@ -220,8 +216,8 @@ npx wrangler d1 execute vmq --remote -c "$(node scripts/cfg.mjs)" --json \
 | `pnpm deploy` 提示发布到 registry | 使用了 pnpm 内置命令 | 改用 `pnpm run deploy` |
 | 全站 500，提示 `no such table` | 未执行 schema 或数据库 ID 错误 | 重新检查第 3、4 步 |
 | binding 找不到数据库 | 配置中的 ID 未更新 | 重新执行 `d1 create` 并更新配置 |
-| `/setup` 返回 404，但已有管理员 | 已完成初始化 | 如需重开，先清空 `admins` 表 |
-| `/setup` 返回 404，管理员为空 | `SETUP_TOKEN` 不匹配 | 查询串和表单隐藏域使用同一 token |
+| `/setup` 返回 404，但已有管理员 | 已完成初始化 | 使用 `scripts/reset-admin.mjs`，不要直接清空管理员表 |
+| `/setup` 返回 404，管理员为空 | 实例曾完成初始化，或 `SETUP_TOKEN` 缺失/不匹配 | 配置正确 `SETUP_TOKEN` 后用 `/setup?token=...`；否则用重置脚本 |
 | 删除 Worker 提示仍有 routes | 绑定了自定义域名 | 先解绑 route / 自定义域名 |
 | 静态资源 404 | 只执行了 `wrangler deploy`，没有构建 | 使用 `pnpm run deploy` |
 | 监控端推送 301/403 | HTTPS 跳转丢失 POST body | 关闭强制跳转，确保接口直连 |
@@ -236,10 +232,10 @@ npx wrangler d1 execute vmq --remote -c "$(node scripts/cfg.mjs)" --json \
 
 ```bash
 npx wrangler d1 execute vmq --remote -c "$(node scripts/cfg.mjs)" --command \
-  "DELETE FROM orders; DELETE FROM tmp_price; DELETE FROM notify_task; DELETE FROM logs; DELETE FROM unmatched_push;"
+  "DELETE FROM orders; DELETE FROM tmp_price; DELETE FROM notify_task; DELETE FROM logs; DELETE FROM unmatched_push; DELETE FROM auth_attempt;"
 
-# 可选：同时清空管理员并重新开放 /setup
-npx wrangler d1 execute vmq --remote -c "$(node scripts/cfg.mjs)" --command "DELETE FROM admins;"
+# 如确需重新走 /setup：必须先配置并验证 SETUP_TOKEN，再清空 admins。
+# 未配置正确令牌时，已初始化实例即使管理员为空也会返回 404。
 ```
 
-清空 `admins` 不会自动重新生成通讯密钥；监控端通常无需重新绑定。
+清空 `admins` 不会自动重新生成通讯密钥；监控端通常无需重新绑定。更推荐直接使用 `scripts/reset-admin.mjs` 重置密码，避免重新开放初始化入口。

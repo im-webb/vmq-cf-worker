@@ -18,6 +18,7 @@ import { EmptyRow, PageHeader, Panel, Pagination, Toolbar } from '@/components/p
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { DateRangePicker } from '@/components/date-range-picker';
 import { api, ApiError } from '@/lib/api';
+import { useMe } from '@/lib/use-me';
 
 interface OrderRow {
   id: number;
@@ -52,6 +53,7 @@ const LIMIT = 20;
 
 export function OrdersPage() {
   const qc = useQueryClient();
+  const canManage = useMe().data?.role === 1;
   const [page, setPage] = useState(1);
   // 与旧版一致：条件先填，点「搜索」才生效
   const EMPTY_FILTERS = { keyword: '', status: '', type: '', start: '', end: '' };
@@ -173,24 +175,26 @@ export function OrdersPage() {
         <Button variant="outline" size="sm" onClick={refresh} disabled={query.isFetching}>
           <RefreshCw className={query.isFetching ? 'animate-spin' : ''} /> 刷新
         </Button>
-        <Button
-          variant="destructive"
-          size="sm"
-          disabled={!selected.length}
-          title={selected.length ? undefined : '先在下方列表勾选要删除的订单'}
-          onClick={() =>
-            setConfirm({
-              open: true,
-              title: `批量删除 ${selected.length} 笔订单？`,
-              desc: '删除后不可恢复，商户侧记录不受影响。',
-              action: async () => {
-                await remove.mutateAsync(selected);
-              },
-            })
-          }
-        >
-          <Trash2 /> 批量删除{selected.length ? ` (${selected.length})` : ''}
-        </Button>
+        {canManage ? (
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={!selected.length}
+            title={selected.length ? undefined : '先在下方列表勾选要删除的订单'}
+            onClick={() =>
+              setConfirm({
+                open: true,
+                title: `批量删除 ${selected.length} 笔订单？`,
+                desc: '删除后不可恢复，商户侧记录不受影响。',
+                action: async () => {
+                  await remove.mutateAsync(selected);
+                },
+              })
+            }
+          >
+            <Trash2 /> 批量删除{selected.length ? ` (${selected.length})` : ''}
+          </Button>
+        ) : null}
         {selected.length ? (
           <span className="text-sm text-muted-foreground">已选 {selected.length} 笔</span>
         ) : null}
@@ -204,6 +208,7 @@ export function OrdersPage() {
                 <input
                   type="checkbox"
                   checked={allChecked}
+                  disabled={!canManage}
                   onChange={(e) => setSelected(e.target.checked ? rows.map((r) => r.id) : [])}
                   aria-label="全选"
                 />
@@ -240,6 +245,7 @@ export function OrdersPage() {
                       <input
                         type="checkbox"
                         checked={selected.includes(r.id)}
+                        disabled={!canManage}
                         onChange={(e) =>
                           setSelected((prev) =>
                             e.target.checked ? [...prev, r.id] : prev.filter((x) => x !== r.id)
@@ -301,25 +307,27 @@ export function OrdersPage() {
                         >
                           <RefreshCw /> 补单
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-8 text-muted-foreground hover:text-destructive"
-                          title="删除该订单"
-                          disabled={remove.isPending}
-                          onClick={() =>
-                            setConfirm({
-                              open: true,
-                              title: '删除这笔订单？',
-                              desc: `订单 ${r.order_id}（${r.money} 元）将被删除，不可恢复；商户侧记录不受影响。`,
-                              action: async () => {
-                                await remove.mutateAsync([r.id]);
-                              },
-                            })
-                          }
-                        >
-                          <Trash2 />
-                        </Button>
+                        {canManage ? (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-8 text-muted-foreground hover:text-destructive"
+                            title="删除该订单"
+                            disabled={remove.isPending}
+                            onClick={() =>
+                              setConfirm({
+                                open: true,
+                                title: '删除这笔订单？',
+                                desc: `订单 ${r.order_id}（${r.money} 元）将被删除，不可恢复；商户侧记录不受影响。`,
+                                action: async () => {
+                                  await remove.mutateAsync([r.id]);
+                                },
+                              })
+                            }
+                          >
+                            <Trash2 />
+                          </Button>
+                        ) : null}
                       </div>
                     </TableCell>
                   </TableRow>

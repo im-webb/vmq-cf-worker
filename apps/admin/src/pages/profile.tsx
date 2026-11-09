@@ -117,7 +117,7 @@ export function ProfilePage() {
                   value={pw.password}
                   onChange={(e) => setPw((p) => ({ ...p, password: e.target.value }))}
                 />
-                <p className="text-xs text-muted-foreground">至少 6 位</p>
+                <p className="text-xs text-muted-foreground">至少 8 位</p>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="pw2">确认新密码</Label>

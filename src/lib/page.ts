@@ -64,8 +64,8 @@ export function injectAssetBase(html: string, base: string): string {
  * 站点 host（不带协议）：配置了 site.url 就用它，否则取当前请求的 host。
  * 监控端扫码绑定的地址要靠它，配置里写的是域名时比 req 更准。
  */
-export function siteHost(cfg: Settings, req?: Request): string {
-  return hostOf(cfg['url'] ?? '') || (req ? externalHost(req) : '');
+export function siteHost(cfg: Settings, req?: Request, env?: Env): string {
+  return hostOf(cfg['url'] ?? '') || (req ? externalHost(req, env) : '');
 }
 
 /** 时间戳 → 'Y-m-d H:i:s'（东八区） */
@@ -103,18 +103,18 @@ export function siteVars(s: Settings): Record<string, unknown> {
   };
 }
 
-export function serverVars(req: Request): Record<string, string> {
+export function serverVars(req: Request, env?: Env): Record<string, string> {
   const u = new URL(req.url);
   return {
     // 反代后面要用 X-Forwarded-Host，模板里的绝对链接（支付宝二维码等）才不会指回 Worker 域名
-    HTTP_HOST: externalHost(req),
+    HTTP_HOST: externalHost(req, env),
     HTTP_USER_AGENT: req.headers.get('user-agent') ?? '',
-    HTTPS: externalProto(req) === 'https' ? 'on' : '',
+    HTTPS: externalProto(req, env) === 'https' ? 'on' : '',
     REQUEST_URI: u.pathname + u.search,
   };
 }
 
 /** 由请求推断协议前缀，拼给模板里的 $http_type */
-export function httpType(req: Request): string {
-  return `${externalProto(req)}://`;
+export function httpType(req: Request, env?: Env): string {
+  return `${externalProto(req, env)}://`;
 }

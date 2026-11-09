@@ -27,7 +27,7 @@ export async function handlePayPage(env: Env, req: Request, orderId: string): Pr
     passage,
     settings,
     userAgent: req.headers.get('user-agent') ?? '',
-    origin: publicUrl(req, '/').replace(/\/+$/, ''),
+    origin: publicUrl(req, '/', env).replace(/\/+$/, ''),
     serverNow: now(),
   });
   return html(body);

@@ -54,10 +54,24 @@ export async function saveAdmin(
 
   if (!/^[A-Za-z0-9_]{3,20}$/.test(username)) return fail('用户名需 3-20 位字母数字下划线');
   if (password || repassword) {
-    if (password.length < 6) return fail('密码至少 6 位');
+    if (password.length < 8) return fail('密码至少 8 位');
     if (password !== repassword) return fail('两次密码不一致');
   }
   if (await repo.usernameTaken(env.DB, username, id)) return fail('用户名已存在');
+  if (role !== 1 && role !== 2) return fail('管理员角色不正确');
+  if (status !== 0 && status !== 1) return fail('管理员状态不正确');
+
+  if (id) {
+    const old = await repo.findAdmin(env.DB, id);
+    if (!old) return fail('管理员不存在');
+    const wasActiveSuper = Number(old.role ?? 0) === 1 && Number(old.status ?? 0) === 1;
+    const remainsActiveSuper = role === 1 && status === 1;
+    if (wasActiveSuper && !remainsActiveSuper) {
+      if ((await repo.countActiveSuperAdmins(env.DB, [id])) === 0) {
+        return fail('至少保留一个启用状态的超级管理员');
+      }
+    }
+  }
 
   const data = { username, role, status, head_img: headImg };
 
@@ -73,8 +87,17 @@ export async function saveAdmin(
 
 export async function setAdminStatus(env: Env, p: Record<string, string>): Promise<ApiResult> {
   const id = intVal(p, 'id');
+  const status = Number(p['status'] ?? 0) || 0;
   if (!id) return fail('缺少 id');
-  await repo.setAdminStatus(env.DB, id, Number(p['status'] ?? 0) || 0);
+  if (status !== 0 && status !== 1) return fail('管理员状态不正确');
+  const old = await repo.findAdmin(env.DB, id);
+  if (!old) return fail('管理员不存在');
+  if (status === 0 && Number(old.role ?? 0) === 1 && Number(old.status ?? 0) === 1) {
+    if ((await repo.countActiveSuperAdmins(env.DB, [id])) === 0) {
+      return fail('至少保留一个启用状态的超级管理员');
+    }
+  }
+  await repo.setAdminStatus(env.DB, id, status);
   return ok('设置成功');
 }
 
@@ -87,6 +110,9 @@ export async function removeAdmins(
   const list = idsOf(p);
   if (list.includes(currentUid)) return fail('不能删除当前登录账号');
   if (!list.length) return fail('缺少 id');
+  if ((await repo.countActiveSuperAdmins(env.DB, list)) === 0) {
+    return fail('至少保留一个启用状态的超级管理员');
+  }
   await repo.removeAdmins(env.DB, list);
   return ok(`已删除 ${list.length} 条`);
 }
@@ -116,7 +142,7 @@ export async function changePassword(
 ): Promise<ApiResult> {
   const pw = p['password'] ?? '';
   const again = p['password_again'] ?? '';
-  if (pw.length < 6) return fail('密码至少 6 位');
+  if (pw.length < 8) return fail('密码至少 8 位');
   if (pw !== again) return fail('两次密码不一致');
   await repo.updatePassword(env.DB, currentUid, await hashPassword(pw));
   return ok('密码已修改，请重新登录');

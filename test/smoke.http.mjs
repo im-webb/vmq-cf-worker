@@ -11,14 +11,10 @@
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { findLocalD1 } from './local-db.mjs';
 
 const BASE = process.env.BASE ?? 'http://localhost:8787';
-const DB = execFileSync("find .wrangler/state/v3/d1 -name '*.sqlite' ! -name 'metadata*'", {
-  encoding: 'utf8',
-  shell: '/bin/sh',
-})
-  .trim()
-  .split('\n')[0];
+const DB = findLocalD1();
 
 /**
  * 后台别名。依次尝试：环境变量 → config 表 → wrangler.local.jsonc 的 vars。
@@ -60,8 +56,8 @@ function check(name, ok, detail = '') {
   }
 }
 
-async function get(path) {
-  const r = await fetch(`${BASE}${path}`, { redirect: 'manual' });
+async function get(path, init = {}) {
+  const r = await fetch(`${BASE}${path}`, { redirect: 'manual', ...init });
   return { status: r.status, type: r.headers.get('content-type') ?? '', text: await r.text(), loc: r.headers.get('location') ?? '' };
 }
 
@@ -116,15 +112,21 @@ console.log(`\n=== 能力接口 ===`);
 const health = await get('/api/health');
 check('/api/health', health.status === 200 && health.text.includes('"ok":true'));
 
-const qr = await get('/enQrcode?url=https%3A%2F%2Fexample.com');
-check('/enQrcode 生成二维码', qr.status === 200 && qr.type.includes('image/'), `${qr.status} ${qr.type}`);
+const qrDenied = await get('/enQrcode?url=https%3A%2F%2Fexample.com');
+check('/enQrcode 拒绝无 Referer 请求', qrDenied.status === 403, String(qrDenied.status));
+const qr = await get('/enQrcode?url=https%3A%2F%2Fexample.com', {
+  headers: { referer: `${BASE}/pay/test` },
+});
+check('/enQrcode 同源页面生成二维码', qr.status === 200 && qr.type.includes('image/'), `${qr.status} ${qr.type}`);
 
 const me = await get('/api/admin/me');
 check('/api/admin/me 未登录 401', me.status === 401, String(me.status));
 
-// /api/stats 是公开状态面板（不是 admin API 的 code/msg 结构）
+// 经营统计和状态页不再对匿名公开
 const stats = await get('/api/stats');
-check('/api/stats 可用', stats.status === 200 && stats.text.includes('"dbReady":true'), String(stats.status));
+check('/api/stats 未登录 401', stats.status === 401, String(stats.status));
+const oldStatus = await get('/__status');
+check('/__status 未登录 404', oldStatus.status === 404, String(oldStatus.status));
 
 console.log(`\n通过 ${pass} 项，失败 ${failures.length} 项`);
 if (failures.length) {

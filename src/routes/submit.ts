@@ -52,5 +52,5 @@ export async function handleSubmit(req: Request, env: Env): Promise<Response> {
   }
 
   // 浏览器访问：跳到支付页（可刷新、可回退，比一次性渲染更稳）
-  return Response.redirect(publicUrl(req, `/pay/${order.order_id}`), 302);
+  return Response.redirect(publicUrl(req, `/pay/${order.order_id}`, env), 302);
 }

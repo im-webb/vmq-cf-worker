@@ -21,6 +21,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog';
 import { DateRangePicker } from '@/components/date-range-picker';
 import { QrCodeField } from '@/components/qr-code-field';
 import { api, ApiError } from '@/lib/api';
+import { useMe } from '@/lib/use-me';
 
 interface PassageRow {
   id: number;
@@ -93,6 +94,7 @@ const EMPTY: FormState = {
 
 export function PassagesPage() {
   const qc = useQueryClient();
+  const canManage = useMe().data?.role === 1;
   const [page, setPage] = useState(1);
   // 与订单页一致：条件先填，点「搜索」才生效
   const EMPTY_FILTERS = {
@@ -257,9 +259,11 @@ export function PassagesPage() {
 
       {/* 操作行 */}
       <Toolbar>
-        <Button size="sm" onClick={() => setForm({ ...EMPTY })}>
-          <Plus /> 新增通道
-        </Button>
+        {canManage ? (
+          <Button size="sm" onClick={() => setForm({ ...EMPTY })}>
+            <Plus /> 新增通道
+          </Button>
+        ) : null}
         <Button
           variant="outline"
           size="sm"
@@ -267,24 +271,26 @@ export function PassagesPage() {
         >
           <RefreshCw className={query.isFetching ? 'animate-spin' : ''} /> 刷新
         </Button>
-        <Button
-          variant="destructive"
-          size="sm"
-          disabled={!selected.length}
-          title={selected.length ? undefined : '先在下方列表勾选要删除的通道'}
-          onClick={() =>
-            setConfirm({
-              open: true,
-              title: `批量删除 ${selected.length} 条通道？`,
-              desc: '删除后这些通道不再参与下单。',
-              action: async () => {
-                await remove.mutateAsync(selected);
-              },
-            })
-          }
-        >
-          <Trash2 /> 批量删除{selected.length ? ` (${selected.length})` : ''}
-        </Button>
+        {canManage ? (
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={!selected.length}
+            title={selected.length ? undefined : '先在下方列表勾选要删除的通道'}
+            onClick={() =>
+              setConfirm({
+                open: true,
+                title: `批量删除 ${selected.length} 条通道？`,
+                desc: '删除后这些通道不再参与下单。',
+                action: async () => {
+                  await remove.mutateAsync(selected);
+                },
+              })
+            }
+          >
+            <Trash2 /> 批量删除{selected.length ? ` (${selected.length})` : ''}
+          </Button>
+        ) : null}
       </Toolbar>
 
       <Panel>
@@ -295,6 +301,7 @@ export function PassagesPage() {
                 <input
                   type="checkbox"
                   checked={rows.length > 0 && selected.length === rows.length}
+                  disabled={!canManage}
                   onChange={(e) => setSelected(e.target.checked ? rows.map((r) => r.id) : [])}
                   aria-label="全选"
                 />
@@ -330,6 +337,7 @@ export function PassagesPage() {
                     <input
                       type="checkbox"
                       checked={selected.includes(r.id)}
+                      disabled={!canManage}
                       onChange={(e) =>
                         setSelected((prev) =>
                           e.target.checked ? [...prev, r.id] : prev.filter((x) => x !== r.id)
@@ -398,7 +406,7 @@ export function PassagesPage() {
                     </div>
                   </TableCell>
                   <TableCell className="sticky right-0 z-10 border-l border-border bg-card text-right shadow-[-6px_0_8px_-8px_rgba(0,0,0,0.15)] group-hover:bg-muted">
-                    <div className="flex items-center justify-end gap-1">
+                    <div className={canManage ? 'flex items-center justify-end gap-1' : 'hidden'}>
                       <Button variant="ghost" size="sm" onClick={() => setForm(toForm(r))}>
                         编辑
                       </Button>

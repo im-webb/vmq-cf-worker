@@ -9,6 +9,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { pbkdf2Sync, randomBytes } from 'node:crypto';
+import { findLocalD1 } from './local-db.mjs';
 
 const BASE = process.argv[2] ?? 'http://localhost:8787';
 const API = `${BASE}/api/admin`;
@@ -28,16 +29,12 @@ function check(name, ok, detail = '') {
   }
 }
 
-const DB = execFileSync("find .wrangler/state/v3/d1 -name '*.sqlite' ! -name 'metadata*'", {
-  encoding: 'utf8',
-  shell: '/bin/sh',
-})
-  .trim()
-  .split('\n')[0];
+const DB = findLocalD1();
 if (!DB) {
   console.log('找不到本地 D1 文件，先执行 pnpm db:local');
   process.exit(1);
 }
+const sqlRun = (q) => execFileSync('sqlite3', [DB], { input: q, encoding: 'utf8' });
 
 /* ---------- 临时关掉图形验证码，跑完恢复 ---------- */
 const capOriginal =
@@ -128,21 +125,40 @@ try {
   }
 
   console.log('\n=== 配置（密钥字段） ===');
+  const qSql = (value) => String(value).replace(/'/g, "''");
+  const oldKey = sqlRun("SELECT v FROM config WHERE k='key';").trim();
+  const oldEpayKey = sqlRun("SELECT v FROM config WHERE k='epaykey_ali';").trim();
+  const testKey = `TEST_KEY_${Math.random().toString(36).slice(2, 10)}`;
+  const testEpayKey = `TEST_EPAY_${Math.random().toString(36).slice(2, 10)}`;
+  sqlRun(
+    `INSERT INTO config (k,v) VALUES ('key','${testKey}') ON CONFLICT(k) DO UPDATE SET v=excluded.v;` +
+      `INSERT INTO config (k,v) VALUES ('epaykey_ali','${testEpayKey}') ON CONFLICT(k) DO UPDATE SET v=excluded.v;`
+  );
+  cleanup(() => {
+    sqlRun(
+      oldKey
+        ? `UPDATE config SET v='${qSql(oldKey)}' WHERE k='key';`
+        : "DELETE FROM config WHERE k='key';"
+    );
+    sqlRun(
+      oldEpayKey
+        ? `UPDATE config SET v='${qSql(oldEpayKey)}' WHERE k='epaykey_ali';`
+        : "DELETE FROM config WHERE k='epaykey_ali';"
+    );
+  });
   const cfg = await call('GET', '/config');
   const cfgData = cfg.json?.data?.config ?? {};
   check('/config 返回配置对象', cfg.json?.code === 1 && typeof cfgData === 'object');
-  // 通讯密钥要在界面上直接可复制，所以明文回传；其它密钥仍然只给「配过没」
-  const dbKey = execFileSync('sqlite3', [DB, "SELECT v FROM config WHERE k='key'"], { encoding: 'utf8' }).trim();
-  check('通讯密钥明文回传（与库里一致）', cfgData.key === dbKey && dbKey.length > 0, `${dbKey.slice(0, 6)}…`);
-  const dbEpayKey = execFileSync('sqlite3', [DB, "SELECT v FROM config WHERE k='epaykey_ali'"], {
-    encoding: 'utf8',
-  }).trim();
-  check(
-    '商户密钥明文回传（与库里一致）',
-    cfgData.epaykey_ali === dbEpayKey,
-    `${(dbEpayKey || '(空)').slice(0, 6)}…`
-  );
-  check('密钥用 secretSet 标记', typeof cfg.json?.data?.secretSet === 'object');
+  // 列表接口只告诉“是否配置”，明文必须通过二次密码验证的接口单独获取
+  const dbKey = testKey;
+  check('通讯密钥不在配置列表回传', cfgData.key === undefined && dbKey.length > 0, cfgData.key ?? '已隐藏');
+  const dbEpayKey = testEpayKey;
+  check('商户密钥不在配置列表回传', cfgData.epaykey_ali === undefined, cfgData.epaykey_ali ?? '已隐藏');
+  check('密钥用 secretSet 标记', cfg.json?.data?.secretSet?.key === true);
+  const revealed = await call('POST', '/config/secret/reveal', { key: 'key', password: PW });
+  check('密码复核后可查看通讯密钥', revealed.json?.data?.value === dbKey);
+  const revealedEpay = await call('POST', '/config/secret/reveal', { key: 'epaykey_ali', password: PW });
+  check('密码复核后可查看商户密钥', revealedEpay.json?.data?.value === dbEpayKey);
   check('不再回传掩码字段', cfg.json?.data?.secretInfo === undefined);
 
   // 支付网关地址没填过时，界面用本站域名兜底，所以接口要给出默认值
@@ -167,13 +183,6 @@ try {
   // app_key 与 key 等价（db.ts 的 appSecret 优先读它），必须同样过滤掉。
   // PUT /config 不接受这个键（不在 CONFIG_KEYS 里），所以直接写库模拟真实配置。
   console.log('\n=== app_key 不回传（回归） ===');
-  const dbPath = execFileSync("find .wrangler/state/v3/d1 -name '*.sqlite' ! -name 'metadata*'", {
-    encoding: 'utf8',
-    shell: '/bin/sh',
-  })
-    .trim()
-    .split('\n')[0];
-  const sqlRun = (q) => execFileSync('sqlite3', [dbPath], { input: q, encoding: 'utf8' });
   const SENTINEL = `SECRET_${Math.random().toString(36).slice(2, 10)}`;
   let sentinelSet = false;
   try {

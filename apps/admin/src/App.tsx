@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   LayoutDashboard,
   LogOut,
@@ -19,6 +19,7 @@ import { Toaster } from '@/components/ui/toaster';
 import { api, UnauthorizedError, type Me } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { LoginPage } from '@/pages/login';
+import { useMe } from '@/lib/use-me';
 
 // 页面按需加载：首屏只下登录 + 概览，其余点开才拉取对应 chunk
 const DashboardPage = lazy(() => import('@/pages/dashboard').then((m) => ({ default: m.DashboardPage })));
@@ -58,26 +59,23 @@ const NAV: Array<{
   },
 ];
 
-function useMe() {
-  return useQuery({
-    queryKey: ['me'],
-    queryFn: async () => (await api.get<Me>('/me')).data,
-    retry: false,
-    staleTime: 60_000,
-  });
-}
 
-function NavItems({ onNavigate }: { onNavigate?: () => void }) {
+function NavItems({ superOnly, onNavigate }: { superOnly: boolean; onNavigate?: () => void }) {
   return (
     <>
-      {NAV.map((section) => (
+      {NAV.map((section) => {
+        const items = section.items.filter(
+          (item) => superOnly || (item.path !== '/admins' && item.path !== '/config')
+        );
+        if (!items.length) return null;
+        return (
         <div key={section.group || 'main'} className="mb-1">
           {section.group ? (
             <p className="px-3 pb-1 pt-3 text-xs font-medium text-muted-foreground">
               {section.group}
             </p>
           ) : null}
-          {section.items.map((item) => (
+          {items.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}
@@ -97,7 +95,8 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
             </NavLink>
           ))}
         </div>
-      ))}
+        );
+      })}
     </>
   );
 }
@@ -123,7 +122,7 @@ function Shell({ me, children }: { me: Me; children: ReactNode }) {
           <Brand markClassName="size-7" />
         </div>
         <nav className="min-h-0 flex-1 overflow-y-auto p-3">
-          <NavItems />
+          <NavItems superOnly={me.role === 1} />
         </nav>
         <div className="border-t border-border p-3">
           <div className="mb-1 flex items-center gap-1">
@@ -170,7 +169,7 @@ function Shell({ me, children }: { me: Me; children: ReactNode }) {
       </header>
       {open ? (
         <nav className="border-b border-border bg-card p-3 md:hidden">
-          <NavItems onNavigate={() => setOpen(false)} />
+          <NavItems superOnly={me.role === 1} onNavigate={() => setOpen(false)} />
         </nav>
       ) : null}
 
@@ -199,8 +198,8 @@ function Guarded() {
         <Route path="/passages" element={<PassagesPage />} />
         <Route path="/qrcodes" element={<QrcodesPage />} />
         <Route path="/logs" element={<LogsPage />} />
-        <Route path="/admins" element={<AdminsPage />} />
-        <Route path="/config" element={<ConfigPage />} />
+        <Route path="/admins" element={me.role === 1 ? <AdminsPage /> : <Navigate to="/" replace />} />
+        <Route path="/config" element={me.role === 1 ? <ConfigPage /> : <Navigate to="/" replace />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -21,6 +21,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog';
 import { QrCodeField } from '@/components/qr-code-field';
 import { QrcodeBatchDialog } from '@/components/qrcode-batch-dialog';
 import { api, ApiError } from '@/lib/api';
+import { useMe } from '@/lib/use-me';
 
 interface QrcodeRow {
   id: number;
@@ -77,6 +78,7 @@ function qrSrc(v: string) {
 
 export function QrcodesPage() {
   const qc = useQueryClient();
+  const canManage = useMe().data?.role === 1;
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<number[]>([]);
   const [form, setForm] = useState<FormState | null>(null);
@@ -172,45 +174,51 @@ export function QrcodesPage() {
       />
 
       <Toolbar>
-        <Button
-          size="sm"
-          onClick={() => setForm(blank())}
-          disabled={!options.data?.length}
-          title={options.data?.length ? undefined : '请先在通道管理中创建通道'}
-        >
-          <Plus /> 新增固定码
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setBatchOpen(true)}
-          disabled={!options.data?.length}
-        >
-          <Upload /> 批量添加
-        </Button>        <Button
+        {canManage ? (
+          <>
+            <Button
+              size="sm"
+              onClick={() => setForm(blank())}
+              disabled={!options.data?.length}
+              title={options.data?.length ? undefined : '请先在通道管理中创建通道'}
+            >
+              <Plus /> 新增固定码
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setBatchOpen(true)}
+              disabled={!options.data?.length}
+            >
+              <Upload /> 批量添加
+            </Button>
+          </>
+        ) : null}        <Button
           variant="outline"
           size="sm"
           onClick={() => void qc.invalidateQueries({ queryKey: ['qrcodes'] })}
         >
           <RefreshCw className={list.isFetching ? 'animate-spin' : ''} /> 刷新
         </Button>
-        <Button
-          variant="destructive"
-          size="sm"
-          disabled={!selected.length}
-          onClick={() =>
-            setConfirm({
-              open: true,
-              title: `批量删除 ${selected.length} 条固定码？`,
-              desc: '删除后，对应金额将回退使用通道默认无金额码。',
-              action: async () => {
-                await remove.mutateAsync(selected);
-              },
-            })
-          }
-        >
-          <Trash2 /> 批量删除{selected.length ? ` (${selected.length})` : ''}
-        </Button>
+        {canManage ? (
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={!selected.length}
+            onClick={() =>
+              setConfirm({
+                open: true,
+                title: `批量删除 ${selected.length} 条固定码？`,
+                desc: '删除后，对应金额将回退使用通道默认无金额码。',
+                action: async () => {
+                  await remove.mutateAsync(selected);
+                },
+              })
+            }
+          >
+            <Trash2 /> 批量删除{selected.length ? ` (${selected.length})` : ''}
+          </Button>
+        ) : null}
       </Toolbar>
 
       <Panel>
@@ -221,6 +229,7 @@ export function QrcodesPage() {
                 <input
                   type="checkbox"
                   checked={rows.length > 0 && selected.length === rows.length}
+                  disabled={!canManage}
                   onChange={(e) => setSelected(e.target.checked ? rows.map((r) => r.id) : [])}
                   aria-label="全选"
                 />
@@ -249,6 +258,7 @@ export function QrcodesPage() {
                     <input
                       type="checkbox"
                       checked={selected.includes(r.id)}
+                      disabled={!canManage}
                       onChange={(e) =>
                         setSelected((prev) =>
                           e.target.checked ? [...prev, r.id] : prev.filter((x) => x !== r.id)
@@ -275,7 +285,7 @@ export function QrcodesPage() {
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">{r.create_time}</TableCell>
                   <TableCell className="sticky right-0 z-10 border-l border-border bg-card text-right shadow-[-6px_0_8px_-8px_rgba(0,0,0,0.15)] group-hover:bg-muted">
-                    <div className="flex items-center justify-end gap-1">
+                    <div className={canManage ? 'flex items-center justify-end gap-1' : 'hidden'}>
                       <Button
                         variant="ghost"
                         size="sm"
