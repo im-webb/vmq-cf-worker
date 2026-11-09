@@ -132,6 +132,26 @@ export async function getConfigInt(env: Env, key: string, def: number): Promise<
 }
 
 /**
+ * 订单超时（分钟）—— **全站唯一口径**。
+ *
+ * 历史上这两个 key 各管一半：后台「交易设置」写的是 `order_timeout`
+ * （支付页倒计时、`/api/order/status` 的 expireAt 都读它），而 cron 关单读的是
+ * `close`。管理员把超时从 5 改成 10，用户页面上倒计时还剩 8 分钟，订单却在第
+ * 5 分钟就被 cron 关成 EXPIRED 并释放了金额占位 —— 用户照付，钱到账也匹配不到
+ * 订单（只能落一条 unmatched_push）。反过来调小同样会错。
+ *
+ * 现在统一走这个函数：优先 `order_timeout`（后台能改的那个），回退 `close`
+ * （老部署里可能只有它），再回退 5。三个调用点共用，改一处不会漏另一处。
+ */
+export async function getOrderTimeoutMinutes(env: Env): Promise<number> {
+  const t = Number.parseInt(await getConfig(env, 'order_timeout'), 10);
+  if (Number.isFinite(t) && t > 0) return t;
+  const c = Number.parseInt(await getConfig(env, 'close'), 10);
+  if (Number.isFinite(c) && c > 0) return c;
+  return 5;
+}
+
+/**
  * 应用密钥（平台唯一一把）。
  *
  * 兼容性约定：监控端签名与商户签名**共用同一把**通讯密钥（旧版就是这个设计，

@@ -1,5 +1,5 @@
 import type { Env } from './lib/db';
-import { getConfigInt, STATUS } from './lib/db';
+import { getOrderTimeoutMinutes, STATUS } from './lib/db';
 import { deliverTask } from './lib/notify';
 import { now } from './lib/util';
 
@@ -27,7 +27,9 @@ export async function runCron(env: Env): Promise<void> {
   }
 
   // 2) 关闭超时订单并释放金额占位
-  const closeMin = await getConfigInt(env, 'close', 5);
+  // ⚠️ 口径必须和支付页倒计时 / `/api/order/status` 的 expireAt 一致，
+  //    统一走 getOrderTimeoutMinutes()，否则「页面还在倒计时、订单已被关单」。
+  const closeMin = await getOrderTimeoutMinutes(env);
   const cutoff = ts - closeMin * 60;
   const expired = await env.DB.prepare(
     'SELECT order_id FROM orders WHERE status = ? AND create_time <= ? LIMIT 100'
