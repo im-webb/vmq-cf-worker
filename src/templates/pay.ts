@@ -52,9 +52,10 @@ export function renderPayPage(order: OrderRow, opt: PayPageOptions): string {
     qrPayload = opt.settings['url'] || opt.origin;
   }
 
-  const directImage = Boolean(
-    order.pay_url && qrPayload === order.pay_url && opt.passage && opt.passage.ewm_type !== 0
-  );
+  // 固定金额码可能是图片，必须用订单保存时的类型判断；
+  // 旧订单没有 pay_url_type 时继续回退所属通道的 ewm_type。
+  const payUrlType = Number(order.pay_url_type ?? opt.passage?.ewm_type ?? 0);
+  const directImage = Boolean(order.pay_url && qrPayload === order.pay_url && payUrlType !== 0);
   const qrSrc = qrPayload
     ? directImage
       ? qrPayload

@@ -112,7 +112,7 @@ async function demoCheckout(
   if (!r.ok || !r.order) return html(demoErrorPage(r.msg));
 
   // 反代场景用 publicUrl：用户从哪个域名进来就还回哪个，不会跳到 workers.dev
-  return Response.redirect(publicUrl(req, `/pay/${r.order.order_id}`), 302);
+  return Response.redirect(publicUrl(req, `/pay/${r.order.order_id}`, env), 302);
 }
 
 function demoErrorPage(msg: string): string {
@@ -131,11 +131,19 @@ a{display:inline-block;margin-top:16px;color:#1f6feb;text-decoration:none;font-s
 }
 
 /** /enQrcode?url=xxx → PNG 二维码（旧版由 PHP 生成，这里用内置编码器） */
-export async function handleQrCode(req: Request): Promise<Response> {
+export async function handleQrCode(req: Request, _env?: Env): Promise<Response> {
   const url = new URL(req.url);
   const data = url.searchParams.get('url') ?? '';
   if (!data) return text('missing url', 400);
   if (data.length > 900) return text('url too long', 400);
+  const referer = req.headers.get('referer') ?? '';
+  let sameOrigin = false;
+  try {
+    sameOrigin = !!referer && new URL(referer).origin === url.origin;
+  } catch {
+    sameOrigin = false;
+  }
+  if (!sameOrigin) return text('forbidden', 403);
 
   const scale = Math.min(12, Math.max(3, Number(url.searchParams.get('size') ?? '6') || 6));
   try {
@@ -143,8 +151,8 @@ export async function handleQrCode(req: Request): Promise<Response> {
     return new Response(png, {
       headers: {
         'content-type': 'image/png',
-        // 内容是收款码地址，一般不变，可短缓存
-        'cache-control': 'public, max-age=86400',
+        'cache-control': 'private, max-age=300',
+        vary: 'Referer',
       },
     });
   } catch (e) {

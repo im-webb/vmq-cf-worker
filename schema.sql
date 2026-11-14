@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS orders (
   money           TEXT    NOT NULL,          -- 商户下单金额
   truemoney       TEXT    NOT NULL,          -- 实际应付金额（金额池分配）
   pay_url         TEXT    NOT NULL DEFAULT '',
+  pay_url_type    INTEGER NOT NULL DEFAULT 0,  -- 0 二维码文本 / 1 直接展示图片
   is_auto         INTEGER NOT NULL DEFAULT 1,  -- 1 自动核对；0 是已下线的固定金额码时代留下的历史值
   notify_url      TEXT    NOT NULL DEFAULT '',
   return_url      TEXT    NOT NULL DEFAULT '',
@@ -61,6 +62,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_out_trade_no ON orders(out_trade_no
 CREATE INDEX IF NOT EXISTS idx_orders_status_time ON orders(status, create_time);
 -- 通道列表的「收款笔数/收款金额」按 passage_id + status 聚合，走这条索引
 CREATE INDEX IF NOT EXISTS idx_orders_passage ON orders(passage_id, status);
+
+-- 固定金额收款码：按金额精确命中时优先使用，未命中回退通道默认码
+CREATE TABLE IF NOT EXISTS qrcodes (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  passage_id   INTEGER NOT NULL,
+  price_fen    INTEGER NOT NULL,
+  pay_url      TEXT    NOT NULL,
+  ewm_type     INTEGER NOT NULL DEFAULT 0,   -- 0 二维码文本 / 1 直接展示图片
+  status       INTEGER NOT NULL DEFAULT 1,
+  remarks      TEXT    NOT NULL DEFAULT '',
+  create_time  INTEGER NOT NULL DEFAULT 0,
+  update_time  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_qrcodes_match ON qrcodes(price_fen, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_qrcodes_passage_price ON qrcodes(passage_id, price_fen);
 
 -- 金额池：price 形如 "1800-1"（分-类型），主键即互斥锁
 CREATE TABLE IF NOT EXISTS tmp_price (
@@ -124,6 +140,14 @@ CREATE TABLE IF NOT EXISTS logs (
   create_time INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_logs_time ON logs(create_time);
+
+-- 登录失败窗口：按账号/IP 记录最近失败，不存密码或令牌
+CREATE TABLE IF NOT EXISTS auth_attempt (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  bucket     TEXT    NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_auth_attempt_bucket ON auth_attempt(bucket, created_at);
 
 -- 后台上传的图片（收款码等）。存 D1 而不引 R2，省一个绑定
 CREATE TABLE IF NOT EXISTS uploads (

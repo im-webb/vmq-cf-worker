@@ -93,8 +93,8 @@ if (!/^[A-Za-z0-9_]{3,20}$/.test(user)) {
   console.error('账号需 3-20 位字母/数字/下划线');
   process.exit(1);
 }
-if (pass.length < 6) {
-  console.error('口令至少 6 位');
+if (pass.length < 8) {
+  console.error('口令至少 8 位');
   process.exit(1);
 }
 

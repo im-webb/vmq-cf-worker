@@ -31,7 +31,7 @@ const config: CrudConfig<Admin> = {
         { value: '2', label: '普通管理员' },
       ],
     },
-    { name: 'password', label: '密码', type: 'password', hint: '编辑时留空则不修改' },
+    { name: 'password', label: '密码', type: 'password', hint: '至少 8 位；编辑时留空则不修改' },
     { name: 'repassword', label: '确认密码', type: 'password' },
     {
       name: 'status',

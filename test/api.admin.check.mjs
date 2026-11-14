@@ -9,6 +9,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { pbkdf2Sync, randomBytes } from 'node:crypto';
+import { findLocalD1 } from './local-db.mjs';
 
 const BASE = process.argv[2] ?? 'http://localhost:8787';
 const API = `${BASE}/api/admin`;
@@ -28,16 +29,12 @@ function check(name, ok, detail = '') {
   }
 }
 
-const DB = execFileSync("find .wrangler/state/v3/d1 -name '*.sqlite' ! -name 'metadata*'", {
-  encoding: 'utf8',
-  shell: '/bin/sh',
-})
-  .trim()
-  .split('\n')[0];
+const DB = findLocalD1();
 if (!DB) {
   console.log('找不到本地 D1 文件，先执行 pnpm db:local');
   process.exit(1);
 }
+const sqlRun = (q) => execFileSync('sqlite3', [DB], { input: q, encoding: 'utf8' });
 
 /* ---------- 临时关掉图形验证码，跑完恢复 ---------- */
 const capOriginal =
@@ -115,6 +112,7 @@ try {
   for (const [path, name] of [
     ['/orders?page=1&limit=2', '订单'],
     ['/passages?page=1&limit=2', '通道'],
+    ['/qrcodes?page=1&limit=2', '固定金额码'],
     ['/logs?page=1&limit=2', '日志'],
     ['/admins?page=1&limit=2', '管理员'],
   ]) {
@@ -127,21 +125,40 @@ try {
   }
 
   console.log('\n=== 配置（密钥字段） ===');
+  const qSql = (value) => String(value).replace(/'/g, "''");
+  const oldKey = sqlRun("SELECT v FROM config WHERE k='key';").trim();
+  const oldEpayKey = sqlRun("SELECT v FROM config WHERE k='epaykey_ali';").trim();
+  const testKey = `TEST_KEY_${Math.random().toString(36).slice(2, 10)}`;
+  const testEpayKey = `TEST_EPAY_${Math.random().toString(36).slice(2, 10)}`;
+  sqlRun(
+    `INSERT INTO config (k,v) VALUES ('key','${testKey}') ON CONFLICT(k) DO UPDATE SET v=excluded.v;` +
+      `INSERT INTO config (k,v) VALUES ('epaykey_ali','${testEpayKey}') ON CONFLICT(k) DO UPDATE SET v=excluded.v;`
+  );
+  cleanup(() => {
+    sqlRun(
+      oldKey
+        ? `UPDATE config SET v='${qSql(oldKey)}' WHERE k='key';`
+        : "DELETE FROM config WHERE k='key';"
+    );
+    sqlRun(
+      oldEpayKey
+        ? `UPDATE config SET v='${qSql(oldEpayKey)}' WHERE k='epaykey_ali';`
+        : "DELETE FROM config WHERE k='epaykey_ali';"
+    );
+  });
   const cfg = await call('GET', '/config');
   const cfgData = cfg.json?.data?.config ?? {};
   check('/config 返回配置对象', cfg.json?.code === 1 && typeof cfgData === 'object');
-  // 通讯密钥要在界面上直接可复制，所以明文回传；其它密钥仍然只给「配过没」
-  const dbKey = execFileSync('sqlite3', [DB, "SELECT v FROM config WHERE k='key'"], { encoding: 'utf8' }).trim();
-  check('通讯密钥明文回传（与库里一致）', cfgData.key === dbKey && dbKey.length > 0, `${dbKey.slice(0, 6)}…`);
-  const dbEpayKey = execFileSync('sqlite3', [DB, "SELECT v FROM config WHERE k='epaykey_ali'"], {
-    encoding: 'utf8',
-  }).trim();
-  check(
-    '商户密钥明文回传（与库里一致）',
-    cfgData.epaykey_ali === dbEpayKey,
-    `${(dbEpayKey || '(空)').slice(0, 6)}…`
-  );
-  check('密钥用 secretSet 标记', typeof cfg.json?.data?.secretSet === 'object');
+  // 列表接口只告诉“是否配置”，明文必须通过二次密码验证的接口单独获取
+  const dbKey = testKey;
+  check('通讯密钥不在配置列表回传', cfgData.key === undefined && dbKey.length > 0, cfgData.key ?? '已隐藏');
+  const dbEpayKey = testEpayKey;
+  check('商户密钥不在配置列表回传', cfgData.epaykey_ali === undefined, cfgData.epaykey_ali ?? '已隐藏');
+  check('密钥用 secretSet 标记', cfg.json?.data?.secretSet?.key === true);
+  const revealed = await call('POST', '/config/secret/reveal', { key: 'key', password: PW });
+  check('密码复核后可查看通讯密钥', revealed.json?.data?.value === dbKey);
+  const revealedEpay = await call('POST', '/config/secret/reveal', { key: 'epaykey_ali', password: PW });
+  check('密码复核后可查看商户密钥', revealedEpay.json?.data?.value === dbEpayKey);
   check('不再回传掩码字段', cfg.json?.data?.secretInfo === undefined);
 
   // 支付网关地址没填过时，界面用本站域名兜底，所以接口要给出默认值
@@ -166,13 +183,6 @@ try {
   // app_key 与 key 等价（db.ts 的 appSecret 优先读它），必须同样过滤掉。
   // PUT /config 不接受这个键（不在 CONFIG_KEYS 里），所以直接写库模拟真实配置。
   console.log('\n=== app_key 不回传（回归） ===');
-  const dbPath = execFileSync("find .wrangler/state/v3/d1 -name '*.sqlite' ! -name 'metadata*'", {
-    encoding: 'utf8',
-    shell: '/bin/sh',
-  })
-    .trim()
-    .split('\n')[0];
-  const sqlRun = (q) => execFileSync('sqlite3', [dbPath], { input: q, encoding: 'utf8' });
   const SENTINEL = `SECRET_${Math.random().toString(36).slice(2, 10)}`;
   let sentinelSet = false;
   try {
@@ -310,6 +320,94 @@ try {
       pr.app_config === wantCfg,
       `${pr.app_config} （期望 ${wantCfg || '空'}）`
     );
+    const opts = await call('GET', '/passages/options');
+    check(
+      '固定码通道下拉包含新通道',
+      opts.json?.code === 1 && (opts.json?.data ?? []).some((x) => x.id === pr.id),
+      Array.isArray(opts.json?.data) ? `count=${opts.json.data.length}` : opts.json?.msg
+    );
+
+    const fixedUrl = 'wxp://FIXED_API_TEST_0_12';
+    const fixedAdd = await call('POST', '/qrcodes', {
+      passage_id: pr.id,
+      price: '0.12',
+      pay_url: fixedUrl,
+      ewm_type: 0,
+      status: 1,
+      remarks: 'FIXED_API_TEST',
+    });
+    check('新增固定金额码', fixedAdd.json?.code === 1, fixedAdd.json?.msg ?? '');
+
+    let fixedRow = null;
+    const fixedList = await call('GET', `/qrcodes?page=1&limit=50&passage_id=${pr.id}`);
+    fixedRow = (fixedList.json?.data ?? []).find((x) => x.remarks === 'FIXED_API_TEST');
+    check('固定码金额格式化', fixedRow?.price === '0.12', fixedRow?.price ?? 'missing');
+    check('固定码内容往返', fixedRow?.pay_url === fixedUrl, fixedRow?.pay_url ?? 'missing');
+    if (fixedRow) {
+      cleanup(async () => {
+        await call('DELETE', `/qrcodes?id=${fixedRow.id}`);
+      });
+
+      const dup = await call('POST', '/qrcodes', {
+        passage_id: pr.id,
+        price: '0.12',
+        pay_url: 'wxp://DUP',
+        ewm_type: 0,
+        status: 1,
+      });
+      check('同通道同金额拒绝重复', dup.json?.code === 0, dup.json?.msg ?? '');
+
+      const edit = await call('PUT', `/qrcodes/${fixedRow.id}`, {
+        passage_id: pr.id,
+        price: '0.13',
+        pay_url: 'wxp://FIXED_API_TEST_0_13',
+        ewm_type: 0,
+        status: 1,
+        remarks: 'FIXED_API_TEST_EDIT',
+      });
+      check('编辑固定金额码', edit.json?.code === 1, edit.json?.msg ?? '');
+
+      const off = await call('PATCH', `/qrcodes/${fixedRow.id}/status`, { status: 0 });
+      check('固定码启停', off.json?.code === 1, off.json?.msg ?? '');
+
+      const delQr = await call('DELETE', `/qrcodes?id=${fixedRow.id}`);
+      check('删除固定金额码', delQr.json?.code === 1, delQr.json?.msg ?? '');
+    }
+
+    const batchAdd = await call('POST', '/qrcodes/batch', {
+      passage_id: pr.id,
+      status: 1,
+      remarks: 'BATCH_API_TEST',
+      items: [
+        { price: '0.17', pay_url: 'wxp://BATCH_API_TEST_0_17', ewm_type: 0 },
+        { price: '0.18', pay_url: '/upload/batch-api-0-18.png', ewm_type: 1 },
+      ],
+    });
+    check(
+      '批量新增固定金额码',
+      batchAdd.json?.code === 1 && batchAdd.json?.data?.inserted === 2,
+      batchAdd.json?.msg ?? ''
+    );
+
+    const batchList = await call('GET', `/qrcodes?page=1&limit=50&passage_id=${pr.id}`);
+    const batchRows = (batchList.json?.data ?? []).filter((x) => x.remarks === 'BATCH_API_TEST');
+    check('批量新增数量正确', batchRows.length === 2, `count=${batchRows.length}`);
+    check('批量图片码类型正确', batchRows.some((x) => x.ewm_type === 1));
+    if (batchRows.length) {
+      cleanup(async () => {
+        await call('DELETE', `/qrcodes?ids=${batchRows.map((x) => x.id).join(',')}`);
+      });
+    }
+
+    const batchDup = await call('POST', '/qrcodes/batch', {
+      passage_id: pr.id,
+      status: 1,
+      items: [
+        { price: '0.19', pay_url: 'wxp://BATCH_API_TEST_0_19', ewm_type: 0 },
+        { price: '0.17', pay_url: 'wxp://BATCH_DUP', ewm_type: 0 },
+      ],
+    });
+    check('批量导入与已有金额冲突整批拒绝', batchDup.json?.code === 0, batchDup.json?.msg ?? '');
 
     // 列表筛选（对齐旧后台搜索行的字段）
 
@@ -322,12 +420,14 @@ try {
   console.log('\n=== 边界 ===');
   const unknown = await call('GET', '/nope');
   check('未知接口 404', unknown.status === 404);
-  // 固定金额码已整块下线：接口必须消失，而不是留个空实现
-  const goneQr = await call('GET', '/qrcodes');
-  check('固定金额码接口已下线 404', goneQr.status === 404, String(goneQr.status));
-  // 「所属通道」下拉只服务于固定金额码表单，随功能一起下线
-  const goneOpts = await call('GET', '/passages/options');
-  check('通道下拉接口一并下线 404', goneOpts.status === 404, String(goneOpts.status));
+  const qrList = await call('GET', '/qrcodes?page=1&limit=2');
+  check(
+    '固定金额码接口可用',
+    qrList.json?.code === 0 && Array.isArray(qrList.json?.data),
+    `count=${qrList.json?.count}`
+  );
+  const passageOpts = await call('GET', '/passages/options');
+  check('固定码通道下拉可用', passageOpts.json?.code === 1, passageOpts.json?.msg ?? '');
   const badPage = await call('GET', '/orders?page=abc&limit=999');
   check('非法分页参数不报错', badPage.json?.code === 0, `count=${badPage.json?.count}`);
 

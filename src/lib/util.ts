@@ -1,3 +1,5 @@
+import type { Env } from './db';
+
 /** 时间/参数/响应等基础工具 */
 
 export const now = (): number => Math.floor(Date.now() / 1000);
@@ -84,32 +86,67 @@ export function clientIp(req: Request): string {
   return req.headers.get('cf-connecting-ip') ?? req.headers.get('x-real-ip') ?? '';
 }
 
+/** 规范化 Host；带协议、路径、用户信息等异常写法一律拒绝。 */
+function normalizedHost(value: string): string {
+  const v = value.trim().toLowerCase();
+  if (!v || /[/\\?#@]/.test(v)) return '';
+  try {
+    const u = new URL(`http://${v}`);
+    return u.host.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function trustedForwardedHost(req: Request, env?: Env): string {
+  if (env?.TRUST_PROXY !== '1') return '';
+  const allowed = new Set(
+    (env.TRUSTED_HOSTS ?? '')
+      .split(',')
+      .map(normalizedHost)
+      .filter(Boolean)
+  );
+  if (!allowed.size) return '';
+  const raw = (req.headers.get('x-forwarded-host') ?? '').split(',')[0] ?? '';
+  const host = normalizedHost(raw);
+  return host && allowed.has(host) ? host : '';
+}
+
 /**
  * 对外访问域名。
  *
- * 站点挂在 nginx/其它反代后面时，Host 头已经被改成 Worker 自己的域名
- * （workers.dev 按 Host 路由，不改就是 403/404），真正给用户看的域名
- * 在 X-Forwarded-Host 里。所以生成绝对链接时优先取它。
+ * 默认只信请求 URL 自身的 Host。反向代理改写了 Host 时，必须同时配置
+ * TRUST_PROXY=1 和 TRUSTED_HOSTS；否则用户可伪造 X-Forwarded-Host 制造开放重定向。
  */
-export function externalHost(req: Request): string {
-  const xf = (req.headers.get('x-forwarded-host') ?? '').split(',')[0].trim();
-  if (xf) return xf;
-  return new URL(req.url).host;
+export function externalHost(req: Request, env?: Env): string {
+  return trustedForwardedHost(req, env) || new URL(req.url).host;
 }
 
-/** 对外协议：同理优先 X-Forwarded-Proto */
-export function externalProto(req: Request): 'http' | 'https' {
-  const xf = (req.headers.get('x-forwarded-proto') ?? '').split(',')[0].trim().toLowerCase();
-  if (xf === 'http' || xf === 'https') return xf;
+/** 对外协议：只有已校验的可信反代 Host 才采信 X-Forwarded-Proto。 */
+export function externalProto(req: Request, env?: Env): 'http' | 'https' {
+  if (trustedForwardedHost(req, env)) {
+    const xf = (req.headers.get('x-forwarded-proto') ?? '').split(',')[0]?.trim().toLowerCase();
+    if (xf === 'http' || xf === 'https') return xf;
+  }
   return new URL(req.url).protocol === 'https:' ? 'https' : 'http';
 }
 
-/** 拼一个用户视角的绝对地址（反代场景下不会串到 Worker 域名） */
-export function publicUrl(req: Request, path: string): string {
-  const p = path.startsWith('/') ? path : `/${path}`;
-  return `${externalProto(req)}://${externalHost(req)}${p}`;
+/** Cookie 的 Secure 判定：Cloudflare 的 CF-Visitor 可信，X-Forwarded-Proto 仍需显式信任反代。 */
+export function isSecureRequest(req: Request, env?: Env): boolean {
+  if (new URL(req.url).protocol === 'https:' || externalProto(req, env) === 'https') return true;
+  const visitor = req.headers.get('cf-visitor') ?? '';
+  try {
+    return (JSON.parse(visitor) as { scheme?: string }).scheme?.toLowerCase() === 'https';
+  } catch {
+    return false;
+  }
 }
 
+/** 拼一个用户视角的绝对地址（反代场景下不会串到 Worker 域名） */
+export function publicUrl(req: Request, path: string, env?: Env): string {
+  const p = path.startsWith('/') ? path : `/${path}`;
+  return `${externalProto(req, env)}://${externalHost(req, env)}${p}`;
+}
 /**
  * 取「纯域名」（不带协议、不带端口以外的路径）：
  *   'https://pay.example.com/'  → 'pay.example.com'

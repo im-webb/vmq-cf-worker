@@ -8,7 +8,8 @@ import { handleHeart, handlePush } from './routes/push';
 import { handleSetup } from './routes/setup';
 import { handleQrCode, handleSitePage, handleUploadGet, isSitePage } from './routes/site';
 import { handleSubmit } from './routes/submit';
-import { json, readParams } from './lib/util';
+import { isSecureRequest, json, readParams } from './lib/util';
+import { currentAdmin } from './lib/auth';
 import { injectAssetBase, loadSettings, rewriteAssetUrls, staticBase } from './lib/page';
 
 /**
@@ -30,13 +31,38 @@ async function serveSpa(env: Env, url: URL): Promise<Response> {
   });
 }
 
+/** 统一给 Worker 动态响应补安全头。 */
+function withSecurityHeaders(response: Response, req: Request, env: Env): Response {
+  const cookieHeaders = (response.headers as Headers & { getSetCookie?: () => string[] })
+    .getSetCookie?.() ?? [];
+  const headers = new Headers(response.headers);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('X-Frame-Options', 'DENY');
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (!headers.has('Content-Security-Policy')) {
+    headers.set('Content-Security-Policy', "frame-ancestors 'none'; object-src 'none'; base-uri 'self'");
+  }
+  if (isSecureRequest(req, env)) {
+    headers.set('Strict-Transport-Security', 'max-age=31536000');
+  }
+  if (cookieHeaders.length) {
+    headers.delete('set-cookie');
+    for (const cookie of cookieHeaders) headers.append('set-cookie', cookie);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 /**
  * 路由表。监控端和旧站相关的路径保持原样（/appPush、/checkOrder、/enQrcode），
  * 这样监控端 App 和已经对接过旧站的商户代码都不用改。
  * 商户下单对外用 /api/order/create，旧地址 /submit.php 只作兼容入口保留。
  */
-export default {
-  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+async function routeRequest(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, '') || '/';
 
@@ -67,7 +93,7 @@ export default {
     // 后台的所有路径都返回 SPA 外壳：前端用 hash 路由，路径本身不带语义。
     // 旧后台地址（/别名/system.passage/index 之类）同样落到 SPA 首页，
     // 不再渲染第三方 layui 模板 —— 旧页面已随模板一并移除。
-    for (const prefix of new Set([`/${alias}`, '/admin'])) {
+    for (const prefix of new Set([`/${alias}`])) {
       if (path === prefix || path.startsWith(`${prefix}/`)) return serveSpa(env, url);
     }
 
@@ -102,7 +128,7 @@ export default {
     }
 
     // 二维码（旧版由 PHP 生成，这里用内置编码器）
-    if (path === '/enQrcode') return handleQrCode(req);
+    if (path === '/enQrcode') return handleQrCode(req, env);
 
     // 后台上传的图片
     if (path.startsWith('/upload/')) return handleUploadGet(env, path.slice('/upload/'.length));
@@ -119,13 +145,21 @@ export default {
 
     // 健康检查 / 服务状态面板
     if (path === '/api/health') return json({ ok: true, ts: Math.floor(Date.now() / 1000) });
-    if (path === '/__status') return handleHome(env);
-    if (path === '/api/stats') return handleStats(env);
+    if (path === '/__status' || path === '/api/stats') {
+      const session = await currentAdmin(req, env);
+      if (!session) return json({ code: 0, msg: '未登录' }, path === '/__status' ? 404 : 401);
+      return path === '/__status' ? handleHome(env) : handleStats(env);
+    }
 
     // 站点前台页面（首页 / 文档 / 示例 / 查单）
     if (isSitePage(path)) return handleSitePage(req, env, path);
 
-    return json({ code: 404, msg: 'Not Found' }, 404);
+  return json({ code: 404, msg: 'Not Found' }, 404);
+}
+
+export default {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    return withSecurityHeaders(await routeRequest(req, env, ctx), req, env);
   },
 
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {

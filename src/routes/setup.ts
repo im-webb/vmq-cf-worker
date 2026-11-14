@@ -2,9 +2,9 @@
  * 首次初始化向导（替代 PHP 版的 install 目录）。
  *
  * 设计约束：
- *   1. **只在没有任何管理员时可用** —— 线上已有管理员，访问 /setup 直接 404，
- *      所以这个文件对已运行的实例完全透明。
- *   2. 初始化完成后永久关闭（管理员存在即不可用），不存在"重置"入口。
+ *   1. **只在没有任何管理员时可用** —— 线上已有管理员，访问 /setup 直接 404。
+ *   2. 初始化完成后即关闭；若管理员表被清空，已初始化实例仍要求 SETUP_TOKEN，
+ *      不再仅凭“表为空”重新开放，避免公开抢注。
  *   3. 通讯密钥 / admin_secret / cron_key 全部**随机生成**，不用文档里的默认值
  *      —— 参考项目把 admin123 写进 README，那是最大的安全隐患。
  *   4. 可选 `SETUP_TOKEN`：配了就要求 URL 带同样的 token，防别人抢先初始化。
@@ -12,7 +12,7 @@
  * 前置条件：已经执行过 `wrangler d1 execute <db> --file=schema.sql --remote`（表存在）。
  */
 import type { Env } from '../lib/db';
-import { setAdminAliasCache } from '../lib/db';
+import { getConfig, setAdminAliasCache } from '../lib/db';
 import { hashPassword } from '../lib/auth';
 import { externalHost, externalProto, html, publicUrl, randHex, text } from '../lib/util';
 
@@ -166,6 +166,7 @@ export async function handleSetup(req: Request, env: Env): Promise<Response> {
   if (count === null) return html(notReadyPage(), 503);
   // 已初始化（线上走这里）→ 一律 404，不暴露任何信息
   if (count > 0) return text('Not Found', 404);
+  const setupDone = await getConfig(env, 'setup_done', '0').catch(() => '0');
 
   // 配了 SETUP_TOKEN 就必须带对，否则当作不存在。
   // 令牌有两个来源：查询串（首次访问 `/setup?token=…`）与表单隐藏域（提交时）。
@@ -180,6 +181,9 @@ export async function handleSetup(req: Request, env: Env): Promise<Response> {
       /* 解析失败留空，下面按未授权处理 */
     }
   }
+  // 已初始化过的实例即使管理员表被清空，也必须用 SETUP_TOKEN 才能重新打开，
+  // 防止任何知道域名的人抢注一个已有密钥和配置的站点。
+  if (setupDone === '1' && (!token || provided !== token)) return text('Not Found', 404);
   if (token && provided !== token) return text('Not Found', 404);
 
   if (req.method === 'GET') return html(formPage(url.searchParams.get('token') ?? token));
@@ -226,7 +230,7 @@ export async function handleSetup(req: Request, env: Env): Promise<Response> {
   const epayId = have.get('epayid_ali') || String(Math.floor(1e9 + Math.random() * 9e9));
   // 对外域名：监控端扫码配置、支付网关地址都用它；认 X-Forwarded-Host，
   // 反代场景下不会把 Worker 自己的域名写进去。
-  const siteUrl = `${externalProto(req)}://${externalHost(req)}`;
+  const siteUrl = `${externalProto(req, env)}://${externalHost(req, env)}`;
   const pwHash = await hashPassword(password);
   const ts = Math.floor(Date.now() / 1000);
 
@@ -259,5 +263,5 @@ export async function handleSetup(req: Request, env: Env): Promise<Response> {
   setAdminAliasCache(alias);
   // 初始化完成直接进登录页：密钥等配置都在后台「系统配置 → 密钥管理」里，
   // 不再中间插一页只显示一次的「初始化完成」（容易让人以为密钥丢了就找不回来）。
-  return Response.redirect(publicUrl(req, `/${alias}/login`), 302);
+  return Response.redirect(publicUrl(req, `/${alias}/login`, env), 302);
 }

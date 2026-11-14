@@ -53,6 +53,12 @@
   //   · 想用环境变量强制指定别名（优先级更高）：wrangler secret put ADMIN_ALIAS
   "vars": {},
 
+  // 仅在使用自有反向代理、且 Worker 收到的 Host 已被改写时才设置：
+  //   "TRUST_PROXY": "1",
+  //   "TRUSTED_HOSTS": "pay.example.com,admin.example.com"
+  // 两项必须同时配置；默认不信任任何 X-Forwarded-*，防止伪造 Host 导致开放重定向。
+  // 开启后必须阻止客户端绕过反代直连 Worker，否则转发头仍可被伪造。
+
   // 部署前必读：
   // 1) 监控端 App 固定请求 https://<host>/appPush，不支持明文降级。
   //    自定义域名走 Cloudflare 默认证书即可；Always Use HTTPS 可以正常开启。

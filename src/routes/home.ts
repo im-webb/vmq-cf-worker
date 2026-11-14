@@ -151,7 +151,7 @@ export async function handleHome(env: Env): Promise<Response> {
 <div class="card">
 <h2>执行这一条命令</h2>
 <pre>pnpm db:local</pre>
-<div class="hint">它会用 <code>schema.sql</code> 建 9 张表。执行完刷新本页即可。</div>
+<div class="hint">它会用 <code>schema.sql</code> 建齐所需表。执行完刷新本页即可。</div>
 </div>
 <div class="card">
 <h2>原始错误</h2>

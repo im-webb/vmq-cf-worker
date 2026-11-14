@@ -64,7 +64,7 @@ function makeEnv(config = {}, rows = []) {
             return null;
           },
           async all() {
-            if (/^SELECT id, type, code/.test(sql)) return { results: rows };
+            if (/FROM passages/.test(sql) && /^SELECT[\s\S]*id, type, code/.test(sql)) return { results: rows };
             return { results: [] };
           },
         });
@@ -243,7 +243,8 @@ eq(await appConfigOf({ key: 'KEY123' }, ''), '', '域名也没认到时返回空
   eq(/^\d{10}$/.test(kv['epayid_ali'] ?? ''), true, '/setup 自动生成 10 位商户 ID', String(kv['epayid_ali']));
   eq(kv['epayurl_ali'], 'https://pay.example.com', '/setup 落库支付网关地址');
 
-  // 反代场景：对外域名只在 X-Forwarded-Host 里，不能把 Worker 自己的域名写进去
+  // 反代场景：只有显式信任 + Host 白名单时才采用 X-Forwarded-Host
+  const trustedEnv = { ...env, TRUST_PROXY: '1', TRUSTED_HOSTS: 'pay.example.com' };
   written.length = 0;
   const res2 = await handleSetup(
     new Request('https://vmq.internal.workers.dev/setup', {
@@ -251,15 +252,33 @@ eq(await appConfigOf({ key: 'KEY123' }, ''), '', '域名也没认到时返回空
       body: form,
       headers: { 'x-forwarded-host': 'pay.example.com', 'x-forwarded-proto': 'https' },
     }),
-    env
+    trustedEnv
   );
   const kv2 = Object.fromEntries(written.map((w) => [w.binds[0], w.binds[1]]));
-  eq(kv2['url'], 'https://pay.example.com', '/setup 认 X-Forwarded-Host');
+  eq(kv2['url'], 'https://pay.example.com', '/setup 在可信反代场景采用对外域名');
   eq(kv2['epayurl_ali'], 'https://pay.example.com', '网关地址也用对外域名');
   eq(
     res2.headers.get('location'),
     'https://pay.example.com/myvault/login',
     '跳转地址也用对外域名'
+  );
+
+  // 未显式信任时，即使伪造 X-Forwarded-Host 也只能使用请求自身域名
+  written.length = 0;
+  const resSpoof = await handleSetup(
+    new Request('https://vmq.internal.workers.dev/setup', {
+      method: 'POST',
+      body: form,
+      headers: { 'x-forwarded-host': 'evil.example.com', 'x-forwarded-proto': 'https' },
+    }),
+    env
+  );
+  const kvSpoof = Object.fromEntries(written.map((w) => [w.binds[0], w.binds[1]]));
+  eq(kvSpoof['url'], 'https://vmq.internal.workers.dev', '默认忽略伪造的 X-Forwarded-Host');
+  eq(
+    resSpoof.headers.get('location'),
+    'https://vmq.internal.workers.dev/myvault/login',
+    '默认跳转也不会被伪造 Host 劫持'
   );
 }
 

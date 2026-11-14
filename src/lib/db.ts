@@ -8,6 +8,10 @@ export interface Env {
   ADMIN_ALIAS?: string;
   /** 可选：首次初始化的令牌。配了之后 /setup 必须带同样的 ?token=，防止被人抢先初始化 */
   SETUP_TOKEN?: string;
+  /** 仅在明确挂在反向代理后时设为 1；默认不信任 X-Forwarded-* */
+  TRUST_PROXY?: string;
+  /** TRUST_PROXY=1 时允许的对外 Host，逗号分隔；为空则仍不信任转发头 */
+  TRUSTED_HOSTS?: string;
 }
 
 /** 后台别名（去掉首尾斜杠），没配就用 admin */
@@ -63,6 +67,7 @@ export interface OrderRow {
   money: string;
   truemoney: string;
   pay_url: string;
+  pay_url_type: number;
   is_auto: number;
   notify_url: string;
   return_url: string;
@@ -74,6 +79,18 @@ export interface OrderRow {
   close_time: number;
   notify_attempts: number;
   ip: string;
+}
+
+export interface QrcodeRow {
+  id: number;
+  passage_id: number;
+  price_fen: number;
+  pay_url: string;
+  ewm_type: number;
+  status: number;
+  remarks: string;
+  create_time: number;
+  update_time: number;
 }
 
 export interface PassageRow {
@@ -116,6 +133,26 @@ export async function getConfigInt(env: Env, key: string, def: number): Promise<
   const v = await getConfig(env, key, String(def));
   const n = Number.parseInt(v, 10);
   return Number.isFinite(n) ? n : def;
+}
+
+/**
+ * 订单超时（分钟）—— **全站唯一口径**。
+ *
+ * 历史上这两个 key 各管一半：后台「交易设置」写的是 `order_timeout`
+ * （支付页倒计时、`/api/order/status` 的 expireAt 都读它），而 cron 关单读的是
+ * `close`。管理员把超时从 5 改成 10，用户页面上倒计时还剩 8 分钟，订单却在第
+ * 5 分钟就被 cron 关成 EXPIRED 并释放了金额占位 —— 用户照付，钱到账也匹配不到
+ * 订单（只能落一条 unmatched_push）。反过来调小同样会错。
+ *
+ * 现在统一走这个函数：优先 `order_timeout`（后台能改的那个），回退 `close`
+ * （老部署里可能只有它），再回退 5。三个调用点共用，改一处不会漏另一处。
+ */
+export async function getOrderTimeoutMinutes(env: Env): Promise<number> {
+  const t = Number.parseInt(await getConfig(env, 'order_timeout'), 10);
+  if (Number.isFinite(t) && t > 0) return t;
+  const c = Number.parseInt(await getConfig(env, 'close'), 10);
+  if (Number.isFinite(c) && c > 0) return c;
+  return 5;
 }
 
 /**

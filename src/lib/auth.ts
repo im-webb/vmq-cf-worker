@@ -1,5 +1,6 @@
 import type { Env } from './db';
 import { getConfig, setConfig } from './db';
+import { isSecureRequest } from './util';
 
 /** base64url */
 export function b64u(buf: ArrayBuffer | Uint8Array): string {
@@ -59,17 +60,49 @@ export interface AdminSession {
 const COOKIE = 'vmq_admin';
 const TTL = 60 * 60 * 12;
 
-export async function issueCookie(env: Env, username: string, id?: number): Promise<string> {
+export async function issueCookie(
+  env: Env,
+  req: Request,
+  username: string,
+  id?: number
+): Promise<string> {
   const secret = await adminSecret(env);
   const payload = b64u(
     enc.encode(JSON.stringify({ u: username, id, exp: Math.floor(Date.now() / 1000) + TTL }))
   );
   const sig = await sign(payload, secret);
-  return `${COOKIE}=${payload}.${sig}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${TTL}`;
+  const secure = isSecureRequest(req, env) ? '; Secure' : '';
+  return `${COOKIE}=${payload}.${sig}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${TTL}${secure}`;
 }
 
-export function clearCookie(): string {
-  return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+export function clearCookie(req?: Request, env?: Env): string {
+  const secure = req && env && isSecureRequest(req, env) ? '; Secure' : '';
+  return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
+}
+
+export interface CurrentAdmin {
+  id: number;
+  username: string;
+  role: number;
+  status: number;
+}
+
+/** 已验证签名的会话还要再查一次管理员表，确保账号存在且仍处于启用状态。 */
+export async function currentAdmin(req: Request, env: Env): Promise<CurrentAdmin | null> {
+  const session = await readSession(req, env);
+  if (!session?.id) return null;
+  const row = await env.DB.prepare(
+    'SELECT id, username, role, status FROM admins WHERE id = ? LIMIT 1'
+  )
+    .bind(session.id)
+    .first<CurrentAdmin>();
+  if (!row || Number(row.status) !== 1) return null;
+  return {
+    id: Number(row.id),
+    username: String(row.username),
+    role: Number(row.role),
+    status: Number(row.status),
+  };
 }
 
 export async function readSession(req: Request, env: Env): Promise<AdminSession | null> {

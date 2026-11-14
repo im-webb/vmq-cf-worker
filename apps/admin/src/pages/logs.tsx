@@ -15,6 +15,7 @@ import {
 import { EmptyRow, PageHeader, Panel, Pagination, Toolbar } from '@/components/page-shell';
 import { ConfirmDialog } from '@/components/confirm-dialog';
 import { api, ApiError } from '@/lib/api';
+import { useMe } from '@/lib/use-me';
 
 interface LogRow {
   id: number;
@@ -33,6 +34,7 @@ const LIMIT = 30;
 
 export function LogsPage() {
   const qc = useQueryClient();
+  const canManage = useMe().data?.role === 1;
   const [page, setPage] = useState(1);
   const [role, setRole] = useState('');
   const [confirm, setConfirm] = useState<{ open: boolean; days: number }>({ open: false, days: 7 });
@@ -106,13 +108,15 @@ export function LogsPage() {
         >
           <RefreshCw className={logs.isFetching ? 'animate-spin' : ''} /> 刷新
         </Button>
-        <Button
-          variant="destructive"
-          size="sm"
-          onClick={() => setConfirm({ open: true, days: 7 })}
-        >
-          <Eraser /> 清理 7 天前
-        </Button>
+        {canManage ? (
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => setConfirm({ open: true, days: 7 })}
+          >
+            <Eraser /> 清理 7 天前
+          </Button>
+        ) : null}
       </Toolbar>
 
       <Panel>

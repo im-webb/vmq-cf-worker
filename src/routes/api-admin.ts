@@ -13,8 +13,10 @@
  *   · 列表 200 + { code: 0, msg: '', count, data } —— 沿用旧版表格契约
  */
 import type { Env } from '../lib/db';
-import { clearCookie, readSession } from '../lib/auth';
-import { json, externalHost, externalProto, originOf, readParams } from '../lib/util';
+import { getConfig } from '../lib/db';
+import { clearCookie, currentAdmin, verifyPassword } from '../lib/auth';
+import { checkLoginThrottle, clearLoginFailures, recordLoginFailure } from '../lib/auth-throttle';
+import { clientIp, json, externalHost, externalProto, now, originOf, readParams } from '../lib/util';
 import { okData, reply, replyFail } from '../http/respond';
 import { handleCaptcha, handleLoginPost } from './auth';
 
@@ -28,6 +30,15 @@ import {
 } from '../modules/passages/passage.service';
 import { listLogs, removeLogs } from '../modules/content/content.service';
 import {
+  listQrcodes,
+  passageOptions,
+  removeQrcodes,
+  saveQrcode,
+  saveQrcodeBatch,
+  setQrcodeStatus,
+} from '../modules/qrcodes/qrcode.service';
+import type { QrcodeBatchPayload } from '../modules/qrcodes/qrcode.service';
+import {
   changePassword,
   listAdmins,
   removeAdmins,
@@ -38,6 +49,7 @@ import {
   setAdminStatus,
 } from '../modules/system/system.service';
 import { allConfig, profileOf } from '../modules/system/system.repository';
+import * as contentRepo from '../modules/content/content.repository';
 import { dashboard, monitorStateOf } from '../modules/stats/stats.service';
 import * as statsRepo from '../modules/stats/stats.repository';
 import { saveUpload } from '../modules/uploads/upload.service';
@@ -46,13 +58,9 @@ import { siteHost } from '../lib/page';
 import { fmtTime } from '../lib/page';
 import { MAX_UPLOAD_LABEL, STATIC_ASSETS_LABEL, UPLOAD_MIME_LABEL } from '../lib/const';
 
-/** 会话里能拿到的最小身份 */
-interface Session {
-  u: string;
-  id?: number;
-}
-
 /** 这些配置项不回传给前端，只告诉它「配过没」 */
+const REVEALABLE_CONFIG_KEYS = new Set(['key', 'app_key', 'merchant_key', 'epaykey_ali']);
+
 const SECRET_CONFIG_KEYS = [
   'key',
   'app_key', // 与 key 等价（db.ts 的 appSecret 优先读它），必须一起过滤
@@ -70,13 +78,17 @@ function notFound(): Response {
   return json({ code: 0, msg: '接口不存在' }, 404);
 }
 
+function forbidden(): Response {
+  return json({ code: 0, msg: '没有权限' }, 403);
+}
+
 /** 退出登录：清 cookie，返回 JSON（旧后台是 302，这里不能跳） */
-function logoutJson(): Response {
+function logoutJson(req: Request, env: Env): Response {
   return new Response(JSON.stringify({ code: 1, msg: '已退出' }), {
     status: 200,
     headers: {
       'content-type': 'application/json; charset=utf-8',
-      'set-cookie': clearCookie(),
+      'set-cookie': clearCookie(req, env),
       'cache-control': 'no-store',
     },
   });
@@ -94,9 +106,10 @@ export async function handleAdminApi(req: Request, env: Env, sub: string): Promi
   if ((path === '/login' || path === '/auth/login') && method === 'POST') {
     return handleLoginPost(req, env);
   }
-  if (path === '/captcha') return handleCaptcha(env);
+  if (path === '/captcha') return handleCaptcha(env, req);
+  if (path === '/logout' && method === 'POST') return logoutJson(req, env);
 
-  const session = (await readSession(req, env)) as Session | null;
+  const session = await currentAdmin(req, env);
 
   /* ---------- 上传：必须在 readParams 之前，multipart 只能读一次 ---------- */
   if (path === '/upload' && method === 'POST') {
@@ -112,10 +125,24 @@ export async function handleAdminApi(req: Request, env: Env, sub: string): Promi
     return reply(await saveUpload(env, file));
   }
 
+  /* ---------- 固定码批量导入必须先读 JSON，不能走扁平参数解析 ---------- */
+  if (path === '/qrcodes/batch' && method === 'POST') {
+    if (!session) return unauthorized();
+    if (session.role !== 1) return forbidden();
+    let payload: QrcodeBatchPayload;
+    try {
+      payload = (await req.json()) as QrcodeBatchPayload;
+    } catch {
+      return replyFail('批量导入数据格式不正确');
+    }
+    return reply(await saveQrcodeBatch(env, payload));
+  }
+
   /* ---------- 其余接口都要登录 ---------- */
   const p = await readParams(req);
   if (!session) return unauthorized();
-  const uid = session.id ?? 1;
+  const uid = session.id;
+  const canManage = session.role === 1;
 
   // 兼容 DELETE /xxx?ids=1,2 与 body { ids: [1,2] }
   if (p['ids'] && !p['id']) p['id'] = p['ids'];
@@ -128,9 +155,8 @@ export async function handleAdminApi(req: Request, env: Env, sub: string): Promi
   if (path === '/me') {
     // head_img 给侧边栏账号区显示头像用（没设置就是空串，前端回退到默认图标）
     const me = await profileOf(env.DB, uid);
-    return reply(okData({ id: uid, username: session.u, role: 1, head_img: me?.head_img ?? '' }));
+    return reply(okData({ id: uid, username: session.username, role: session.role, head_img: me?.head_img ?? '' }));
   }
-  if (path === '/logout' && method === 'POST') return logoutJson();
 
   if (path === '/profile') {
     if (method === 'PUT' || method === 'POST') return reply(await saveProfile(env, p, uid));
@@ -161,7 +187,7 @@ export async function handleAdminApi(req: Request, env: Env, sub: string): Promi
     return reply(
       okData({
         edition: `${cfg['edition'] ?? 'v1.0.0'}（Cloudflare 版）`,
-        siteAddress: siteHost(cfg, req),
+        siteAddress: siteHost(cfg, req, env),
         runPlatform: 'Cloudflare Workers · workerd',
         database: 'D1 (SQLite) · APAC',
         // 只给「细节」，状态词由前端的徽标承担（否则会出现「监控端在线 · 在线 · 32 秒前心跳」的重复）
@@ -189,7 +215,10 @@ export async function handleAdminApi(req: Request, env: Env, sub: string): Promi
 
   if (path === '/orders') {
     if (method === 'GET') return reply(await listOrders(env, p));
-    if (method === 'DELETE') return reply(await removeOrders(env, p));
+    if (method === 'DELETE') {
+      if (!canManage) return forbidden();
+      return reply(await removeOrders(env, p));
+    }
     return notFound();
   }
   if (seg[0] === 'orders' && seg[2] === 'notify' && method === 'POST') {
@@ -199,10 +228,14 @@ export async function handleAdminApi(req: Request, env: Env, sub: string): Promi
 
   /* ============================ 通道 ============================ */
 
+  if (path === '/passages/options' && method === 'GET') {
+    return reply(await passageOptions(env));
+  }
   if (path === '/passages') {
+    if (method !== 'GET' && !canManage) return forbidden();
     if (method === 'GET') {
       // 传对外 origin：反代场景下 Host 已是 Worker 域名，真实域名在 X-Forwarded-Host
-      const origin = `${externalProto(req)}://${externalHost(req)}`;
+      const origin = `${externalProto(req, env)}://${externalHost(req, env)}`;
       return reply(await listPassages(env, p, origin));
     }
     if (method === 'POST') return reply(await savePassage(env, p, 0));
@@ -210,6 +243,7 @@ export async function handleAdminApi(req: Request, env: Env, sub: string): Promi
     return notFound();
   }
   if (seg[0] === 'passages' && seg.length >= 2) {
+    if (!canManage) return forbidden();
     const id = pathId();
     if (seg[2] === 'status' && method === 'PATCH') {
       p['id'] = String(id);
@@ -220,11 +254,33 @@ export async function handleAdminApi(req: Request, env: Env, sub: string): Promi
     }
   }
 
+  /* ============================ 固定金额码 ============================ */
+
+  if (path === '/qrcodes') {
+    if (method !== 'GET' && !canManage) return forbidden();
+    if (method === 'GET') return reply(await listQrcodes(env, p));
+    if (method === 'POST') return reply(await saveQrcode(env, p, 0));
+    if (method === 'DELETE') return reply(await removeQrcodes(env, p));
+    return notFound();
+  }
+  if (seg[0] === 'qrcodes' && seg.length >= 2) {
+    if (!canManage) return forbidden();
+    const id = pathId();
+    if (seg[2] === 'status' && method === 'PATCH') {
+      p['id'] = String(id);
+      return reply(await setQrcodeStatus(env, p));
+    }
+    if (!seg[2] && (method === 'PUT' || method === 'PATCH')) {
+      return reply(await saveQrcode(env, p, id));
+    }
+  }
+
   /* ============================ 日志 ============================ */
 
   if (path === '/logs') {
     if (method === 'GET') return reply(await listLogs(env, p));
     if (method === 'DELETE') {
+      if (!canManage) return forbidden();
       // 支持 ?days=7 清理 N 天前；只传 id 则按行删除
       if (p['days']) p['time'] = p['days'];
       return reply(await removeLogs(env, p));
@@ -233,6 +289,8 @@ export async function handleAdminApi(req: Request, env: Env, sub: string): Promi
   }
 
   /* ============================ 管理员 ============================ */
+
+  if ((path === '/admins' || seg[0] === 'admins') && !canManage) return forbidden();
 
   if (path === '/admins') {
     if (method === 'GET') return reply(await listAdmins(env, p));
@@ -253,6 +311,35 @@ export async function handleAdminApi(req: Request, env: Env, sub: string): Promi
 
   /* ============================ 配置 ============================ */
 
+  if ((path === '/config' || seg[0] === 'config') && !canManage) return forbidden();
+
+  if (path === '/config/secret/reveal' && method === 'POST') {
+    const key = (p['key'] ?? '').trim();
+    const password = p['password'] ?? '';
+    const ip = clientIp(req);
+    if (!REVEALABLE_CONFIG_KEYS.has(key)) return replyFail('该密钥不允许查看');
+    const throttle = await checkLoginThrottle(env, `reauth:${uid}`, ip);
+    if (throttle.locked) return replyFail('密码验证尝试过多，请稍后再试');
+    const row = await env.DB.prepare('SELECT password_hash FROM admins WHERE id = ? AND status = 1')
+      .bind(uid)
+      .first<{ password_hash: string }>();
+    if (!row || !(await verifyPassword(password, row.password_hash))) {
+      await recordLoginFailure(env, `reauth:${uid}`, ip);
+      await contentRepo.addLog(env.DB, uid, `密钥查看失败：${key}`, ip);
+      return replyFail('当前账号密码错误');
+    }
+    await clearLoginFailures(env, `reauth:${uid}`, ip);
+    const value = await getConfig(env, key);
+    try {
+      await env.DB.prepare('INSERT INTO logs (uid, content, ip, create_time) VALUES (?, ?, ?, ?)')
+        .bind(uid, `查看密钥：${key}`, clientIp(req), now())
+        .run();
+    } catch {
+      return replyFail('审计日志写入失败，已拒绝显示密钥');
+    }
+    return reply(okData({ key, value }));
+  }
+
   if (path === '/config') {
     if (method === 'GET') {
       const all = await allConfig(env.DB);
@@ -260,14 +347,11 @@ export async function handleAdminApi(req: Request, env: Env, sub: string): Promi
       const secretSet: Record<string, boolean> = {};
       for (const k of SECRET_CONFIG_KEYS) {
         secretSet[k] = !!(all[k] ?? '');
-        // 通讯密钥 / 商户密钥都要在界面上直接可见可复制（商户、监控端都得用它），
-        // 所以这两个照旧回传；其余密钥仍是「只告诉配过没」，原文不出库。
-        if (k === 'key' || k === 'epaykey_ali') continue;
         delete data[k];
       }
       // 支付网关地址的默认值：系统自己的域名（带协议）。
       // 优先用「站点地址」配置，没配就用当前请求的对外 origin，反代场景下也对。
-      const reqOrigin = `${externalProto(req)}://${externalHost(req)}`;
+      const reqOrigin = `${externalProto(req, env)}://${externalHost(req, env)}`;
       const defaults = { epayurl_ali: originOf(all['url'] ?? '') || reqOrigin };
       return reply(okData({ config: data, secretSet, defaults }));
     }

@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/page-shell';
 import { api, ApiError } from '@/lib/api';
@@ -14,14 +16,15 @@ interface ConfigPayload {
   config: Record<string, string>;
   /** 用户没填过时的默认值（目前只有支付网关地址 = 本站域名） */
   defaults?: Record<string, string>;
+  /** 密钥只返回是否已配置，不回传明文 */
+  secretSet?: Record<string, boolean>;
 }
 
 interface ConfigField {
   name: string;
   label: string;
   hint?: string;
-  /** 留空保存 = 保持不变（提交时空值会被跳过，避免误清空）。
-      密钥类字段在界面上都是明文展示、可直接复制的。 */
+  /** 留空保存 = 保持不变（提交时空值会被跳过，避免误清空）。 */
   secret?: boolean;
   full?: boolean;
 }
@@ -88,6 +91,13 @@ const GROUPS: ConfigGroup[] = [
 export function ConfigPage() {
   const qc = useQueryClient();
   const [values, setValues] = useState<Record<string, string>>({});
+  const [reveal, setReveal] = useState<{
+    key: string;
+    label: string;
+    password: string;
+    value: string;
+    busy: boolean;
+  } | null>(null);
 
   const cfg = useQuery({
     queryKey: ['config'],
@@ -114,6 +124,21 @@ export function ConfigPage() {
   });
 
   /** 只提交当前 tab 的字段；密钥留空不提交（后端也按「留空不改」处理） */
+  async function revealSecret() {
+    if (!reveal || reveal.busy) return;
+    setReveal({ ...reveal, busy: true });
+    try {
+      const r = await api.post<{ key: string; value: string }>('/config/secret/reveal', {
+        key: reveal.key,
+        password: reveal.password,
+      });
+      setReveal({ ...reveal, busy: false, value: r.data?.value ?? '' });
+    } catch (e) {
+      setReveal({ ...reveal, busy: false });
+      toast.error(e instanceof ApiError ? e.message : '查看失败');
+    }
+  }
+
   function submit(g: ConfigGroup) {
     // 连点保护：disabled 要下一帧才生效，同一帧内的重复点击会并发提交
     if (save.isPending) return;
@@ -154,13 +179,33 @@ export function ConfigPage() {
                 {g.fields.map((f) => (
                   <div key={f.name} className={f.full ? 'col-span-2 space-y-1.5' : 'space-y-1.5'}>
                     <Label htmlFor={f.name}>{f.label}</Label>
-                    <Input
-                      id={f.name}
-                      value={values[f.name] ?? ''}
-                      onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
-                      // 密钥是明文展示的，清空后保存等于「不修改」，这里给个提示
-                      placeholder={f.secret ? '留空保存表示不修改' : undefined}
-                    />
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id={f.name}
+                        type={f.secret ? 'password' : 'text'}
+                        value={values[f.name] ?? ''}
+                        onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
+                        placeholder={f.secret ? '输入新值；留空保存表示不修改' : undefined}
+                      />
+                      {f.secret && cfg.data?.secretSet?.[f.name] ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setReveal({ key: f.name, label: f.label, password: '', value: '', busy: false })
+                          }
+                        >
+                          查看当前值
+                        </Button>
+                      ) : null}
+                    </div>
+                    {f.secret ? (
+                      <p className="text-xs text-muted-foreground">
+                        {cfg.data?.secretSet?.[f.name] ? '已配置。' : '尚未配置。'}
+                        查看明文需要再次输入当前账号密码，并会记录操作日志。
+                      </p>
+                    ) : null}
                     {f.hint ? <p className="text-xs text-muted-foreground">{f.hint}</p> : null}
                   </div>
                 ))}
@@ -178,6 +223,39 @@ export function ConfigPage() {
         ))}
       </Tabs>
 
+      <Dialog open={!!reveal} onOpenChange={(open) => !open && setReveal(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>查看{reveal?.label ?? '密钥'}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="reveal-password">当前账号密码</Label>
+              <PasswordInput
+                id="reveal-password"
+                value={reveal?.password ?? ''}
+                onChange={(e) => reveal && setReveal({ ...reveal, password: e.target.value, value: '' })}
+                autoComplete="current-password"
+              />
+            </div>
+            {reveal?.value ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="reveal-value">当前密钥</Label>
+                <Input id="reveal-value" readOnly value={reveal.value} className="font-mono" />
+                <p className="text-xs text-destructive">请勿通过聊天、截图或工单发送此值。</p>
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReveal(null)} disabled={reveal?.busy}>
+              关闭
+            </Button>
+            <Button onClick={() => void revealSecret()} disabled={!reveal?.password || reveal?.busy}>
+              {reveal?.busy ? '验证中…' : '验证并查看'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
